@@ -2,9 +2,6 @@
 
 Utilities for hand-drawn SVG path generation and line-boil animation.
 
-Repo: <https://github.com/mkbabb/pencil-boil>  
-Primary consumer: <https://github.com/mkbabb/csp-solver>
-
 ## Install
 
 ```bash
