@@ -1,20 +1,47 @@
 # pencil-boil
 
-Utilities for hand-drawn SVG path generation and line-boil animation.
+`pencil-boil` is a small utility library for hand-drawn SVG geometry and frame-cycled boil motion.
+
+If you want the line to feel re-traced, this package gives you the primitives. If you need domain structure, keep that in the host app.
+
+## First principles
+
+The model is simple:
+
+1. Start from deterministic randomness.
+2. Build a base line from seeded points.
+3. Perturb interior points across frames while anchors stay fixed.
+4. Cycle frames at a measured cadence.
+
+That’s the whole game. The rest is parameter touch.
+
+## Scope
+
+This package is intentionally generic. It contains geometry and timing helpers, and leaves domain logic to consumers.
+
+A Sudoku grid generator, for example, belongs in the Sudoku app. `pencil-boil` should stay clean enough to reuse elsewhere, en coulisses, with minimal ceremony.
 
 ## Install
+
+From npm:
 
 ```bash
 npm install @mkbabb/pencil-boil
 ```
 
-Local development:
+From GitHub:
+
+```bash
+npm install github:mkbabb/pencil-boil
+```
+
+Local development link:
 
 ```bash
 npm install ../../../pencil-boil
 ```
 
-## Quick usage
+## Quick start
 
 ```ts
 import {
@@ -30,65 +57,58 @@ import {
 } from '@mkbabb/pencil-boil';
 ```
 
-## API
+## API surface
 
 - `mulberry32(seed)`: deterministic PRNG.
-- `wobbleLine`, `wobbleRect`: hand-drawn path helpers.
-- `wobbleLinePoints`, `perturbPoints`: low-level point generation and boil perturbation.
-- `wobbleDiamond`, `wobbleStarPolygon`, `generateSunRays`: decorative geometry helpers.
+- `wobbleLine`, `wobbleRect`: hand-drawn path builders.
+- `wobbleLinePoints`, `perturbPoints`: base-point generation and frame perturbation.
+- `wobbleDiamond`, `wobbleStarPolygon`, `generateSunRays`: decorative polygon helpers.
 - `useLineBoil(frameCount, intervalMs)`: Vue frame cycler.
 
-## Animation notes
+## Runtime behavior
 
-This package ships generic motion primitives. Domain topology stays in the host app.
+### `path.ts`
 
-### Modules
+Path helpers expose a deterministic pipeline:
 
-| Module | Exports | Purpose |
-|---|---|---|
-| `random.ts` | `mulberry32` | Deterministic PRNG |
-| `path.ts` | `wobbleLine`, `wobbleRect`, `wobbleLinePoints`, `perturbPoints` | Hand-drawn path geometry |
-| `celestial.ts` | `wobbleDiamond`, `wobbleStarPolygon`, `generateSunRays` | Decorative geometry helpers |
-| `vue.ts` | `useLineBoil` | Reactive frame loop for Vue |
+- `wobbleLinePoints` derives the base polyline from `roughness`, `segments`, and `seed`.
+- `perturbPoints` perturbs interior points only, so endpoints remain stable.
+- interior perturbation tapers by position, which keeps anchors visually settled.
+- `wobbleLine` serializes to smooth (`Catmull-Rom`) or jagged (`M/L`) SVG data.
+- `wobbleRect` composes four seeded sides into one closed path.
 
-### Path behavior
-
-- `wobbleLinePoints` builds a deterministic polyline from `roughness`, `segments`, and `seed`.
-- `perturbPoints` produces frame variants while keeping endpoints anchored.
-- Interior perturbation is tapered, so anchors stay calm while midline retains character.
-- `wobbleLine` supports smooth (`Catmull-Rom`) and jagged (`M/L`) serialization.
-- `wobbleRect` composes four independently seeded sides into one closed path.
-
-### Vue frame loop
+### `vue.ts`
 
 `useLineBoil(frameCount, intervalMs)`:
 
-- accepts numbers, refs, or getters
-- advances on `requestAnimationFrame`
-- steps at the requested interval
-- pauses while document visibility is hidden
-- resumes when visible
-- respects `prefers-reduced-motion`
+- accepts numbers, refs, or getters.
+- advances on `requestAnimationFrame`.
+- steps by interval, not by monitor refresh variance.
+- pauses when `document.visibilityState` is hidden.
+- resumes on visibility restore.
+- respects `prefers-reduced-motion`.
 
 ```ts
 const { currentFrame, start, stop } = useLineBoil(4, 125);
 ```
 
-### Integration pattern
+## Integration pattern
 
-For stable boil with good touch:
+In most apps, the durable flow is:
 
-1. Generate base points once.
-2. Precompute `N` perturbed frames.
-3. Drive frame index with `useLineBoil`.
-4. Swap rendered `d`/`points` by frame.
+1. generate base geometry once,
+2. precompute `N` perturbed frames,
+3. drive an index with `useLineBoil`,
+4. swap `d` or `points` from the precomputed frame set.
 
-### Performance notes
+That yields deterministic motion with bounded CPU work.
 
-- Keep `segments` in a moderate range unless fidelity demands more detail.
-- Prefer precomputation to per-tick regeneration.
-- Reuse seeds for visual stability across rerenders.
-- Pause motion whereof it is not visible.
+## Performance notes
+
+- keep `segments` moderate unless fidelity compels otherwise.
+- precompute frame arrays where practical.
+- reuse seeds so rerenders don’t introduce visual drift.
+- pause motion when hidden.
 
 ## Development
 
