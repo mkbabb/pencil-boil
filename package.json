@@ -1,6 +1,6 @@
 {
   "name": "@mkbabb/pencil-boil",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Hand-drawn boil utilities for SVG and Vue 3.",
   "type": "module",
   "main": "./src/index.ts",
