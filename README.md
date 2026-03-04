@@ -1,11 +1,9 @@
 # pencil-boil
 
-Small utility library for hand-drawn SVG wobble and line-boil animation.
+Utilities for hand-drawn SVG path generation and line-boil animation.
 
-No framework lock-in for geometry; one Vue composable for frame cycling.
-
-Source: <https://github.com/mkbabb/pencil-boil>  
-Consumer example: <https://github.com/mkbabb/csp-solver>
+Repo: <https://github.com/mkbabb/pencil-boil>  
+Primary consumer: <https://github.com/mkbabb/csp-solver>
 
 ## Install
 
@@ -13,13 +11,13 @@ Consumer example: <https://github.com/mkbabb/csp-solver>
 npm install @mkbabb/pencil-boil
 ```
 
-Local development install:
+Local development:
 
 ```bash
 npm install ../../../pencil-boil
 ```
 
-## Usage
+## Quick usage
 
 ```ts
 import {
@@ -37,25 +35,63 @@ import {
 
 ## API
 
-- `mulberry32(seed)` — deterministic seeded PRNG.
-- `wobbleLine`, `wobbleRect` — hand-drawn path primitives.
-- `wobbleLinePoints`, `perturbPoints` — point-level control for custom effects.
-- `wobbleDiamond`, `wobbleStarPolygon`, `generateSunRays` — celestial shape helpers.
-- `useLineBoil(frameCount, intervalMs)` — Vue frame-cycler composable.
+- `mulberry32(seed)`: deterministic PRNG.
+- `wobbleLine`, `wobbleRect`: hand-drawn path helpers.
+- `wobbleLinePoints`, `perturbPoints`: low-level point generation and boil perturbation.
+- `wobbleDiamond`, `wobbleStarPolygon`, `generateSunRays`: decorative geometry helpers.
+- `useLineBoil(frameCount, intervalMs)`: Vue frame cycler.
 
-## More docs
+## Animation notes
 
-- [`ANIMATION.md`](./ANIMATION.md) — behavior details, tuning notes, and integration patterns.
-- Hosted link: <https://github.com/mkbabb/pencil-boil/blob/master/ANIMATION.md>
-- [`src/path.ts`](./src/path.ts) — generic wobble path implementation.
-- [`src/vue.ts`](./src/vue.ts) — reactive boil loop composable.
+This package ships generic motion primitives. Domain topology stays in the host app.
 
-## Runtime notes
+### Modules
 
-- Uses `requestAnimationFrame` for frame cycling.
-- Pauses boil loops when tab is hidden; resumes when visible.
-- Respects `prefers-reduced-motion`.
-- Keeps boil perturbation anchored at endpoints with tapered interior offsets.
+| Module | Exports | Purpose |
+|---|---|---|
+| `random.ts` | `mulberry32` | Deterministic PRNG |
+| `path.ts` | `wobbleLine`, `wobbleRect`, `wobbleLinePoints`, `perturbPoints` | Hand-drawn path geometry |
+| `celestial.ts` | `wobbleDiamond`, `wobbleStarPolygon`, `generateSunRays` | Decorative geometry helpers |
+| `vue.ts` | `useLineBoil` | Reactive frame loop for Vue |
+
+### Path behavior
+
+- `wobbleLinePoints` builds a deterministic polyline from `roughness`, `segments`, and `seed`.
+- `perturbPoints` produces frame variants while keeping endpoints anchored.
+- Interior perturbation is tapered, so anchors stay calm while midline retains character.
+- `wobbleLine` supports smooth (`Catmull-Rom`) and jagged (`M/L`) serialization.
+- `wobbleRect` composes four independently seeded sides into one closed path.
+
+### Vue frame loop
+
+`useLineBoil(frameCount, intervalMs)`:
+
+- accepts numbers, refs, or getters
+- advances on `requestAnimationFrame`
+- steps at the requested interval
+- pauses while document visibility is hidden
+- resumes when visible
+- respects `prefers-reduced-motion`
+
+```ts
+const { currentFrame, start, stop } = useLineBoil(4, 125);
+```
+
+### Integration pattern
+
+For stable boil with good touch:
+
+1. Generate base points once.
+2. Precompute `N` perturbed frames.
+3. Drive frame index with `useLineBoil`.
+4. Swap rendered `d`/`points` by frame.
+
+### Performance notes
+
+- Keep `segments` in a moderate range unless fidelity demands more detail.
+- Prefer precomputation to per-tick regeneration.
+- Reuse seeds for visual stability across rerenders.
+- Pause motion whereof it is not visible.
 
 ## Development
 
