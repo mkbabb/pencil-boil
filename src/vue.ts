@@ -1,4 +1,4 @@
-import { onMounted, onUnmounted, ref, toValue, type MaybeRefOrGetter } from 'vue';
+import { onMounted, onUnmounted, ref, toValue, type MaybeRefOrGetter, type Ref } from 'vue';
 
 function normalizeFrameCount(value: number): number {
   if (!Number.isFinite(value)) return 1;
@@ -10,9 +10,92 @@ function normalizeInterval(value: number): number {
   return Math.max(16, Math.floor(value));
 }
 
+interface Subscriber {
+  currentFrame: Ref<number>;
+  getFrameCount: () => number;
+  getInterval: () => number;
+  lastTick: number;
+  active: boolean;
+}
+
+// ── Singleton RAF scheduler ──────────────────────────────────────────
+
+const subscribers = new Set<Subscriber>();
+let rafId: number | null = null;
+let schedulerRunning = false;
+
+function schedulerTick(timestamp: number) {
+  if (!schedulerRunning) return;
+
+  for (const sub of subscribers) {
+    if (!sub.active) continue;
+
+    const frameTotal = sub.getFrameCount();
+    const interval = sub.getInterval();
+    if (sub.currentFrame.value >= frameTotal) sub.currentFrame.value = 0;
+
+    if (sub.lastTick === 0) sub.lastTick = timestamp;
+
+    const elapsed = timestamp - sub.lastTick;
+    if (elapsed >= interval) {
+      const steps = Math.floor(elapsed / interval);
+      sub.lastTick += steps * interval;
+      sub.currentFrame.value = (sub.currentFrame.value + steps) % frameTotal;
+    }
+  }
+
+  rafId = requestAnimationFrame(schedulerTick);
+}
+
+function ensureScheduler() {
+  if (schedulerRunning || typeof window === 'undefined') return;
+  schedulerRunning = true;
+  rafId = requestAnimationFrame(schedulerTick);
+}
+
+function maybeStopScheduler() {
+  let anyActive = false;
+  for (const sub of subscribers) {
+    if (sub.active) { anyActive = true; break; }
+  }
+  if (!anyActive && rafId !== null) {
+    cancelAnimationFrame(rafId);
+    rafId = null;
+    schedulerRunning = false;
+  }
+}
+
+// Pause/resume on tab visibility
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+        schedulerRunning = false;
+      }
+    } else {
+      // Reset lastTick so elapsed doesn't jump
+      for (const sub of subscribers) {
+        if (sub.active) sub.lastTick = 0;
+      }
+      ensureScheduler();
+    }
+  });
+}
+
+// ── Composable ───────────────────────────────────────────────────────
+
+function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 /**
- * Vue composable for frame cycling.
- * - Uses requestAnimationFrame for smooth cadence.
+ * Vue composable for frame cycling with a shared singleton RAF loop.
+ * All consumers tick on the same requestAnimationFrame callback,
+ * eliminating per-instance RAF overhead.
+ *
  * - Supports number, Ref, or getter for frameCount + intervalMs.
  * - Pauses when tab is hidden; resumes when visible.
  * - Respects prefers-reduced-motion.
@@ -23,88 +106,36 @@ export function useLineBoil(
 ) {
   const currentFrame = ref(0);
 
-  let rafId: number | null = null;
-  let running = false;
-  let shouldRun = false;
-  let lastTick = 0;
-
-  const getFrameCount = () => normalizeFrameCount(toValue(frameCount));
-  const getInterval = () => normalizeInterval(toValue(intervalMs));
-
-  function prefersReducedMotion(): boolean {
-    if (typeof window === 'undefined') return false;
-    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  }
-
-  function haltLoop() {
-    if (rafId !== null && typeof window !== 'undefined') {
-      window.cancelAnimationFrame(rafId);
-      rafId = null;
-    }
-    running = false;
-    lastTick = 0;
-  }
-
-  function tick(timestamp: number) {
-    if (!running || typeof window === 'undefined') return;
-
-    const frameTotal = getFrameCount();
-    const interval = getInterval();
-    if (currentFrame.value >= frameTotal) currentFrame.value = 0;
-
-    if (lastTick === 0) lastTick = timestamp;
-
-    const elapsed = timestamp - lastTick;
-    if (elapsed >= interval) {
-      const steps = Math.floor(elapsed / interval);
-      lastTick += steps * interval;
-      currentFrame.value = (currentFrame.value + steps) % frameTotal;
-    }
-
-    rafId = window.requestAnimationFrame(tick);
-  }
-
-  function beginLoop() {
-    if (running || typeof window === 'undefined' || prefersReducedMotion()) return;
-    running = true;
-    lastTick = 0;
-    rafId = window.requestAnimationFrame(tick);
-  }
+  const sub: Subscriber = {
+    currentFrame,
+    getFrameCount: () => normalizeFrameCount(toValue(frameCount)),
+    getInterval: () => normalizeInterval(toValue(intervalMs)),
+    lastTick: 0,
+    active: false,
+  };
 
   function start() {
-    shouldRun = true;
-    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-    beginLoop();
+    if (prefersReducedMotion()) return;
+    sub.active = true;
+    sub.lastTick = 0;
+    subscribers.add(sub);
+    ensureScheduler();
   }
 
   function stop() {
-    shouldRun = false;
-    haltLoop();
-  }
-
-  function handleVisibilityChange() {
-    if (typeof document === 'undefined') return;
-    if (document.visibilityState === 'hidden') {
-      haltLoop();
-      return;
-    }
-    if (shouldRun) beginLoop();
+    sub.active = false;
+    maybeStopScheduler();
   }
 
   onMounted(() => {
     start();
-    if (typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', handleVisibilityChange);
-    }
   });
 
   onUnmounted(() => {
-    if (typeof document !== 'undefined') {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    }
-    haltLoop();
+    stop();
+    subscribers.delete(sub);
+    maybeStopScheduler();
   });
 
   return { currentFrame, start, stop };
 }
-
