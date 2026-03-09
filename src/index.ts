@@ -6,6 +6,7 @@ export {
   pointsToLinear,
   wobbleLinePoints,
   perturbPoints,
+  perturbPointsClosed,
   wobbleLine,
   wobbleRect,
 } from './path';

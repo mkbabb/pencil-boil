@@ -142,6 +142,38 @@ export function perturbPoints(
 }
 
 /**
+ * Add perpendicular perturbations to a closed polygon's points for boil frames.
+ * Unlike `perturbPoints` (which uses a global line direction), this computes
+ * the local tangent at each vertex using its neighbours with modular wrapping,
+ * then displaces perpendicular to that tangent.
+ *
+ * Every point is perturbed (no anchored endpoints) since the path is closed.
+ */
+export function perturbPointsClosed(
+  points: [number, number][],
+  amount: number,
+  seed: number,
+): [number, number][] {
+  const n = points.length;
+  if (n < 3 || amount === 0) return points.map((p) => [p[0], p[1]]);
+
+  const rng = mulberry32(seed);
+
+  return points.map((p, i) => {
+    const prev = points[(i - 1 + n) % n];
+    const next = points[(i + 1) % n];
+    const dx = next[0] - prev[0];
+    const dy = next[1] - prev[1];
+    const len = Math.hypot(dx, dy) || 1;
+    // Perpendicular to local tangent
+    const nx = -dy / len;
+    const ny = dx / len;
+    const offset = (rng() - 0.5) * 2 * amount;
+    return [p[0] + nx * offset, p[1] + ny * offset] as [number, number];
+  });
+}
+
+/**
  * Generate a wobbly line path between two points.
  */
 export function wobbleLine(
