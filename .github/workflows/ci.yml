@@ -1,0 +1,27 @@
+# ci — PR + push gate for @mkbabb/pencil-boil (G.W5 Sub-wave C).
+#
+# pencil-boil publishes its TypeScript source directly (main/module/types
+# all point at ./src/index.ts; files: ["src", ...]) — there is no build or
+# test script. The single real gate is `check` (tsc --noEmit), which is the
+# type-soundness contract for the published source.
+name: ci
+
+on:
+    pull_request:
+        branches: [main, master]
+    push:
+        branches: [main, master]
+
+jobs:
+    gates:
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: "npm"
+            - run: npm ci
+            - name: check (tsc --noEmit)
+              run: npm run check

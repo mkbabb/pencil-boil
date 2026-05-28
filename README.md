@@ -147,6 +147,11 @@ code.
 - Increase `roughness` and boil `amount` conservatively to maintain line legibility.
 - Pause hidden motion to avoid unnecessary work.
 
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md). The README shape follows the perimeter-level
+[canonical README shape](https://github.com/mkbabb/glass-ui/blob/master/docs/precepts/canonical-readme-shape.md).
+
 ## License
 
-Unlicense.
+[Unlicense](./LICENSE) — public domain.

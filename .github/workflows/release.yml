@@ -1,0 +1,30 @@
+# release — publish @mkbabb/pencil-boil to npm on a v*.*.* tag (G.W5 Sub-wave C).
+#
+# Re-runs the type gate (check) before npm publish. pencil-boil ships
+# TypeScript source directly (no build step); the published tarball is the
+# src/ tree per the package.json `files` field.
+#
+# Publish auth: NPM_TOKEN repository secret. Runs only on tag refs.
+name: release
+
+on:
+    push:
+        tags:
+            - "v*.*.*"
+
+jobs:
+    publish:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  registry-url: "https://registry.npmjs.org"
+            - run: npm ci
+            - name: check (tsc --noEmit)
+              run: npm run check
+            - name: publish
+              run: npm publish --access public
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
