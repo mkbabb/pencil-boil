@@ -9,6 +9,7 @@ export {
   perturbPointsClosed,
   wobbleLine,
   wobbleRect,
+  ellipsePoints,
 } from './path';
 
 export { wobbleDiamond, wobbleStarPolygon, generateSunRays } from './celestial';

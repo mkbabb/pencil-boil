@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0 — 2026-06-10 (tranche-C handmark cohort)
+
+Adds `ellipsePoints` to `path.ts` — a seeded wobble ellipse returned as a closed
+point ring with a hand-circled overshoot (the sweep runs past 2π so the ring crosses
+its own start). It follows the IR-first convention of `wobbleLinePoints`: it emits
+`[number, number][]`, so the ring boils via `perturbPointsClosed` and serialises via
+`catmullRomToBezier` — the same contract as every other primitive. This is the sole
+geometry `@mkbabb/glass-ui`'s new `./handmark` component (positioned circle mode)
+required upstream; no other surface changed. Exported from `src/index.ts`.
+
 ## 0.3.0 — 2026-05-28 (G.W5 cohort)
 
 The current published version, seeded as the initial CHANGELOG entry as part of the

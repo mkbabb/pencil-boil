@@ -216,3 +216,31 @@ export function wobbleRect(
   );
 }
 
+/**
+ * Seeded wobble ellipse as a closed point ring with a hand-circled overshoot.
+ *
+ * Returns POINTS (not a path string) so the ring boils via `perturbPointsClosed`
+ * and serialises via `catmullRomToBezier` — the IR-first convention every other
+ * primitive here follows (`wobbleLinePoints`). The sweep runs *past* 2π by a
+ * seeded fraction so the ring crosses its own start: hand-circled, not snapped.
+ */
+export function ellipsePoints(
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
+  options: WobbleOptions = {},
+): [number, number][] {
+  const seg = toPositiveInt(options.segments, 16, 12);
+  const rng = mulberry32(Math.floor(toFinite(options.seed, 42)));
+  const amp = toFinite(options.roughness, 1) * Math.min(rx, ry) * 0.06;
+  const sweep = Math.PI * 2 + (0.05 + rng() * 0.12); // overshoot → hand-circled
+  const points: [number, number][] = [];
+  for (let i = 0; i <= seg; i++) {
+    const a = (sweep * i) / seg - Math.PI / 2;
+    const j = (rng() - 0.5) * 2 * amp;
+    points.push([cx + Math.cos(a) * (rx + j), cy + Math.sin(a) * (ry + j)]);
+  }
+  return points;
+}
+
