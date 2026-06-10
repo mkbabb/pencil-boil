@@ -17,7 +17,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "proof": "node proofs/boil-guard.proof.ts"
   },
   "keywords": [
     "svg",

@@ -1,4 +1,11 @@
-import { onMounted, onUnmounted, ref, toValue, type MaybeRefOrGetter, type Ref } from 'vue';
+import {
+  onUnmounted,
+  ref,
+  toValue,
+  watchEffect,
+  type MaybeRefOrGetter,
+  type Ref,
+} from 'vue';
 
 function normalizeFrameCount(value: number): number {
   if (!Number.isFinite(value)) return 1;
@@ -115,7 +122,13 @@ export function useLineBoil(
   };
 
   function start() {
+    // Two independent gates: a reduced-motion preference, and a static frame.
+    // A single static frame (frameCount <= 1) animates nothing, so it must NEVER
+    // subscribe to the singleton scheduler — the boil loop's existence is derived
+    // from whether any mark actually cycles frames, never a side effect of mounting.
     if (prefersReducedMotion()) return;
+    if (sub.getFrameCount() <= 1) return;
+    if (sub.active) return;
     sub.active = true;
     sub.lastTick = 0;
     subscribers.add(sub);
@@ -124,17 +137,22 @@ export function useLineBoil(
 
   function stop() {
     sub.active = false;
+    subscribers.delete(sub);
     maybeStopScheduler();
   }
 
-  onMounted(() => {
-    start();
+  // Enrol/withdraw reactively from the live frame count: a `draw-on` mark
+  // (frameCount === 1) never enrols; a `draw-then-boil` mark enrols the instant
+  // its count crosses 1 after the draw completes; a mark that drops back to a
+  // single frame withdraws and lets the scheduler disarm.
+  const stopWatch = watchEffect(() => {
+    if (sub.getFrameCount() > 1) start();
+    else stop();
   });
 
   onUnmounted(() => {
+    stopWatch();
     stop();
-    subscribers.delete(sub);
-    maybeStopScheduler();
   });
 
   return { currentFrame, start, stop };
