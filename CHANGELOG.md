@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.1 — 2026-07-06 (grand-uplift W12 release train)
+
+`useBoilFrames<T>(cacheKeyParts, generateAll, maxEntries?)` — a memoizing frame-set cache.
+Wraps a pure boil-frame generator behind an explicit-key, insertion-order LRU `Map` (default
+cap 24): the generator runs only on a cache miss, a hit is touched for recency, and
+non-integer key parts quantize to 4 decimals so float tuples key stably. Framework-agnostic
+(no `vue` import) — a pure memoizer any consumer can share, promoting the ad-hoc frame-cache
+discipline hand-rolled in the sudoku consumer's `gridPaths.ts` into the library.
+
 ## 0.5.0 — 2026-07-06 (grand-uplift W12 release train)
 
 The unified boil scheduler. One rAF chain now drives every boil consumer through a generic
