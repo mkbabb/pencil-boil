@@ -18,7 +18,7 @@
   ],
   "scripts": {
     "check": "tsc --noEmit",
-    "proof": "node --import ./proofs/loader.mjs proofs/boil-guard.proof.ts && node --import ./proofs/loader.mjs proofs/frames.proof.ts",
+    "proof": "node --import ./proofs/loader.mjs proofs/boil-guard.proof.ts && node --import ./proofs/loader.mjs proofs/frames.proof.ts && node --import ./proofs/loader.mjs proofs/celestial.proof.ts",
     "test": "npm run check && npm run proof"
   },
   "keywords": [
