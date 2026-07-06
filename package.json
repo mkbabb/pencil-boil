@@ -18,7 +18,8 @@
   ],
   "scripts": {
     "check": "tsc --noEmit",
-    "proof": "node proofs/boil-guard.proof.ts"
+    "proof": "node --import ./proofs/loader.mjs proofs/boil-guard.proof.ts",
+    "test": "npm run check && npm run proof"
   },
   "keywords": [
     "svg",
