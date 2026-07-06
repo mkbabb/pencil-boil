@@ -36,3 +36,5 @@ export {
 } from './vue';
 
 export { isBoilHeld, acquireHold, releaseHold, heldFrameCount } from './boilHoldGate';
+
+export { useBoilFrames } from './frames';
