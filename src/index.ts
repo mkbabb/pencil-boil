@@ -34,3 +34,5 @@ export {
   usePrefersReducedMotion,
   schedulerDebugInfo,
 } from './vue';
+
+export { isBoilHeld, acquireHold, releaseHold, heldFrameCount } from './boilHoldGate';
