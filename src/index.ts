@@ -9,6 +9,8 @@ export {
   perturbPointsClosed,
   wobbleLine,
   wobbleRect,
+  boilLineFrames,
+  boilRectFrames,
   ellipsePoints,
 } from './path';
 
@@ -31,10 +33,11 @@ export {
   useFilterParamBoil,
   createBoilTicker,
   createSequenceSubscription,
+  createStrokeDrawIn,
   usePrefersReducedMotion,
   schedulerDebugInfo,
 } from './vue';
 
 export { isBoilHeld, acquireHold, releaseHold, heldFrameCount } from './boilHoldGate';
 
-export { useBoilFrames } from './frames';
+export { useBoilCache, useBoilFrames } from './frames';

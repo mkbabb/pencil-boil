@@ -16,10 +16,17 @@ step.
 
 ```bash
 npm run check          # tsc --noEmit
+npm run proof          # run every proof script under proofs/
+npm test               # check + proof (the full gate)
 ```
 
-CI runs `check` on every PR + push to the default branch
-(`.github/workflows/ci.yml`).
+The proofs are plain node scripts (run through `proofs/loader.mjs`) that assert the
+library's invariants — the scheduler single-chain floor, the `useBoilCache`/`useBoilFrames`
+LRU, the `boilLineFrames`/`boilRectFrames` determinism, the celestial point counts. Add a
+proof for any new primitive.
+
+CI runs `npm test` on every PR + push to the default branch
+(`.github/workflows/ci.yml`), so every proof executes on push.
 
 ## Version bumps + releasing
 

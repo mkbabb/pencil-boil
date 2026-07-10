@@ -40,7 +40,7 @@ import {
   type MaybeRefOrGetter,
   type Ref,
 } from 'vue';
-import { linear, type Easing } from './easings';
+import { easeOutCubic, linear, type Easing } from './easings';
 
 function normalizeFrameCount(value: number): number {
   if (!Number.isFinite(value)) return 1;
@@ -393,6 +393,60 @@ export function createSequenceSubscription(opts: {
     maybeStopScheduler();
   }
   return { start, stop };
+}
+
+// ── createStrokeDrawIn — stroke-dashoffset draw-in on the shared chain ──
+//
+// The canonical `sequence` consumer: draw a path on as if by hand by tweening
+// stroke-dashoffset from its full length down to 0. Sets the dash pattern up front, drives it
+// via one `createSequenceSubscription`, and on completion clears the array outright
+// (`strokeDasharray: 'none'`) so the settled stroke is solid even when `pathLength` is only
+// approximate (the dash-gap-at-rest defect). Under PRM it paints the solid end state at once,
+// fires `onComplete`, and returns an inert handle — never enrolling on the chain.
+//
+// `pathLength` defaults to the element's own `getTotalLength()` when omitted; pass it
+// explicitly when the geometry's measured length is unreliable (hand-authored glyph paths).
+
+export function createStrokeDrawIn(
+  pathEl: SVGGeometryElement,
+  opts: {
+    pathLength?: number;
+    durationMs?: number;
+    delayMs?: number;
+    easing?: Easing;
+    onComplete?: () => void;
+  } = {},
+): SequenceHandle {
+  const length =
+    opts.pathLength ??
+    (typeof pathEl.getTotalLength === 'function' ? pathEl.getTotalLength() : 0);
+
+  const settle = () => {
+    pathEl.style.strokeDasharray = 'none';
+    pathEl.style.strokeDashoffset = '0';
+  };
+
+  if (prmRef.value) {
+    settle();
+    opts.onComplete?.();
+    return { start: () => {}, stop: () => {} };
+  }
+
+  pathEl.style.strokeDasharray = String(length);
+  pathEl.style.strokeDashoffset = String(length);
+
+  return createSequenceSubscription({
+    durationMs: opts.durationMs ?? 350,
+    delayMs: opts.delayMs ?? 0,
+    easing: opts.easing ?? easeOutCubic,
+    onProgress: (eased) => {
+      pathEl.style.strokeDashoffset = String(length * (1 - eased));
+    },
+    onComplete: () => {
+      settle();
+      opts.onComplete?.();
+    },
+  });
 }
 
 // ── instrumentation hook — reports the live chain/subscriber floor ──

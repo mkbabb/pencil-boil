@@ -22,12 +22,14 @@ import {
 
 ## Module map
 
-| Module         | Exports                                                                                                 | Purpose                           |
-| -------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| `random.ts`    | `mulberry32`                                                                                            | Deterministic PRNG                |
-| `path.ts`      | `wobbleLine`, `wobbleRect`, `wobbleLinePoints`, `perturbPoints`, `catmullRomToBezier`, `pointsToLinear` | Path generation and serialization |
-| `celestial.ts` | `wobbleDiamond`, `wobbleStarPolygon`, `generateSunRays`                                                 | Decorative polygon helpers        |
-| `vue.ts`       | `useLineBoil`                                                                                           | Reactive frame loop for Vue       |
+| Module           | Exports                                                                                                                                                                              | Purpose                                    |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------ |
+| `random.ts`      | `mulberry32`                                                                                                                                                                        | Deterministic PRNG                         |
+| `path.ts`        | `wobbleLine`, `wobbleRect`, `wobbleLinePoints`, `perturbPoints`, `catmullRomToBezier`, `pointsToLinear`, `boilLineFrames`, `boilRectFrames`, `ellipsePoints`                       | Path generation, serialization, prebake    |
+| `celestial.ts`   | `wobbleDiamond`, `wobbleStarPolygon`, `generateSunRays`                                                                                                                            | Decorative polygon helpers                 |
+| `frames.ts`      | `useBoilCache`, `useBoilFrames`                                                                                                                                                    | LRU memoizer for prebaked boil work        |
+| `vue.ts`         | `useLineBoil`/`useBoilFrame`, `useFilterParamBoil`, `createBoilTicker`, `createSequenceSubscription`, `createStrokeDrawIn`, `usePrefersReducedMotion`, `schedulerDebugInfo`       | The one-chain rAF scheduler + tween/draw-in |
+| `boilHoldGate.ts` | `acquireHold`, `releaseHold`, `isBoilHeld`, `heldFrameCount`                                                                                                                       | Freeze the boil in place (hold-to-peek)    |
 
 ## Animation model
 
@@ -129,6 +131,26 @@ const frames = Array.from({ length: frameCount }, (_, frame) => {
 const { currentFrame } = useLineBoil(frameCount, 125);
 const d = computed(() => frames[currentFrame.value]);
 ```
+
+The manual base → perturb → serialize loop above is what `boilLineFrames` (and
+`boilRectFrames`) do in one call; wrap them in `useBoilCache` so the frame set is prebaked
+once per structural tuple and reused across rerenders:
+
+```ts
+import { boilLineFrames, useBoilCache, useLineBoil } from "@mkbabb/pencil-boil";
+
+const frameCount = 4;
+const frames = useBoilCache(["hrule", x1, y1, x2, y2, frameCount], () =>
+    boilLineFrames(x1, y1, x2, y2, frameCount, 0.8, { seed: 900, jagged: true }),
+);
+
+const { currentFrame } = useLineBoil(frameCount, 125);
+const d = computed(() => frames[currentFrame.value]);
+```
+
+`createStrokeDrawIn(pathEl, { durationMs, easing })` rides the same one rAF chain to draw a
+path on by hand (stroke-dashoffset from its full length to `0`), settling to a solid stroke on
+completion and painting the end state immediately under `prefers-reduced-motion`.
 
 ## Celestial helpers
 

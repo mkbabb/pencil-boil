@@ -217,6 +217,75 @@ export function wobbleRect(
 }
 
 /**
+ * Prebake a full boil-frame set for a single line — `frameCount` path strings that a
+ * scheduler subscriber cycles through to make the line jitter in place.
+ *
+ * The base wobble points are generated ONCE (`wobbleLinePoints`), then each frame perturbs
+ * that same skeleton by `boilAmount` under a per-frame seed so the anchors stay put while the
+ * mid-points shiver — the "generate points once, perturb per frame" convention. Pure of its
+ * arguments, so it pairs directly with `useBoilCache([...key], () => boilLineFrames(...))`.
+ */
+export function boilLineFrames(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  frameCount: number,
+  boilAmount: number,
+  options: WobbleOptions = {},
+): string[] {
+  const frames = toPositiveInt(frameCount, 4, 1);
+  const amount = toFinite(boilAmount, 0);
+  const jagged = options.jagged ?? false;
+  const seed = Math.floor(toFinite(options.seed, 42));
+  const base = wobbleLinePoints(x1, y1, x2, y2, options);
+  const serialize = (pts: [number, number][]) =>
+    jagged ? pointsToLinear(pts) : catmullRomToBezier(pts);
+
+  const out: string[] = [];
+  for (let f = 0; f < frames; f++) {
+    // Frame 0 is the un-perturbed base so a static (frameCount === 1) mark reads as the plain
+    // wobble; every later frame shivers off it under a distinct seed.
+    const pts = f === 0 ? base : perturbPoints(base, x1, y1, x2, y2, amount, seed + f * 1013);
+    out.push(serialize(pts));
+  }
+  return out;
+}
+
+/**
+ * Prebake a full boil-frame set for a rectangle frame — `frameCount` closed path strings.
+ *
+ * Each of the four edges is prebaked independently (offset seeds, as `wobbleRect` does), then
+ * the per-frame edges compose into one closed `M…C… … Z` string. Same purity contract as
+ * {@link boilLineFrames} — cache it once per structural tuple.
+ */
+export function boilRectFrames(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  frameCount: number,
+  boilAmount: number,
+  options: WobbleOptions = {},
+): string[] {
+  const frames = toPositiveInt(frameCount, 4, 1);
+  const s = Math.floor(toFinite(options.seed, 42));
+  const top = boilLineFrames(x, y, x + w, y, frames, boilAmount, { ...options, seed: s });
+  const right = boilLineFrames(x + w, y, x + w, y + h, frames, boilAmount, { ...options, seed: s + 1 });
+  const bottom = boilLineFrames(x + w, y + h, x, y + h, frames, boilAmount, { ...options, seed: s + 2 });
+  const left = boilLineFrames(x, y + h, x, y, frames, boilAmount, { ...options, seed: s + 3 });
+
+  const dropMove = (d: string) => d.replace(/^M[^ ]+/, '');
+  const out: string[] = [];
+  for (let f = 0; f < frames; f++) {
+    out.push(
+      top[f] + ' ' + dropMove(right[f]) + ' ' + dropMove(bottom[f]) + ' ' + dropMove(left[f]) + ' Z',
+    );
+  }
+  return out;
+}
+
+/**
  * Seeded wobble ellipse as a closed point ring with a hand-circled overshoot.
  *
  * Returns POINTS (not a path string) so the ring boils via `perturbPointsClosed`

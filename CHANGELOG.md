@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.7.0 — 2026-07-10 (tranche-2 W5 release)
+
+Prebake + draw-in surface, hoisted out of the consumer that hand-rolled it.
+
+`useBoilCache<T>(cacheKeyParts, compute, maxEntries?)` — the general memoizer under
+`useBoilFrames`. It caches ONE computed `T` (a frame array, a serialized path, a points ring)
+behind the same explicit-key insertion-order LRU (default cap 24). `useBoilFrames<T>` is now a
+thin `useBoilCache<T[]>` wrapper over the SAME underlying `Map`, so one cap governs all boil
+memoization rather than two APIs fighting over separate caches.
+
+`boilLineFrames(x1, y1, x2, y2, frameCount, boilAmount, options?)` and
+`boilRectFrames(x, y, w, h, frameCount, boilAmount, options?)` — the base → perturb → serialize
+loop every consumer wrote by hand, in one call. The base wobble skeleton is generated once,
+then each frame shivers off it under a distinct seed (frame 0 is the un-perturbed base). Pure
+of their arguments, so they pair directly with `useBoilCache([...key], () => boilLineFrames(...))`.
+
+`createStrokeDrawIn(pathEl, { pathLength?, durationMs?, delayMs?, easing?, onComplete? })` — the
+canonical `sequence` consumer, hoisted from the sudoku glyph layer. Tweens stroke-dashoffset
+from the path's full length to `0` on the one shared rAF chain, clears the dash array on
+completion (`strokeDasharray: 'none'`) so the settled stroke is solid even when `pathLength` is
+approximate, and under `prefers-reduced-motion` paints the solid end state immediately without
+enrolling on the chain. `pathLength` defaults to the element's own `getTotalLength()`.
+
+Docs: README module map reflects the actual surface (`frames.ts`, `boilHoldGate.ts`, the full
+scheduler export list) and folds the manual perturb loop into the `boilLineFrames` +
+`useBoilCache` one-liner; CONTRIBUTING documents `npm run proof` / `npm test` (CI has run the
+proofs since 0.6.0, the doc said only `check`).
+
+The scheduler is untouched — one rAF chain, the `chains=1` / floor-`subscribers` invariant,
+reactive-PRM teardown, and every existing signature carry forward unchanged.
+
 ## 0.6.0 — 2026-07-06 (grand-uplift W12 release train)
 
 Celestial generator proofs. `proofs/celestial.proof.ts` locks the point-count, determinism,
