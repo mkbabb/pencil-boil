@@ -3,31 +3,42 @@
  *
  * pencil-boil ships TS source with no test runner; the in-repo gate is `tsc --noEmit`
  * plus this runnable, dependency-free assertion script. It runs headlessly on Node
- * (native TS stripping) by stubbing `window`/`requestAnimationFrame`/`matchMedia` and
- * driving the composables inside a Vue `effectScope` (so `watchEffect`/`onUnmounted`
- * resolve without a real component mount).
+ * (native TS stripping) by stubbing `window`/`requestAnimationFrame`/`setTimeout`/
+ * `matchMedia` and driving the composables inside a Vue `effectScope` (so
+ * `watchEffect`/`onUnmounted` resolve without a real component mount).
  *
  *   node proofs/boil-guard.proof.ts
  *
+ * "Armed" spans BOTH wake shapes the 0.8.0 scheduler holds: a pending beat timer
+ * (frame-only parking) or an outstanding rAF (a beat landing / a live sequence).
+ *
  * Proofs:
- *   (a) frameCount=1 mark mounts   => scheduler NEVER arms (zero rAF subscriptions).
- *   (b) frameCount=3 mark mounts   => arms; unmount => disarms (rAF stops re-arming).
+ *   (a) frameCount=1 mark mounts   => scheduler NEVER arms (no timer, no rAF).
+ *   (b) frameCount=3 mark mounts   => arms; unmount => disarms (stops re-arming).
  *   (c) prefers-reduced-motion on  => never arms, regardless of frameCount.
  *   (d) draw-then-boil: 1 -> 3 enrols after the draw; 3 -> 1 withdraws & disarms.
  *   (e) PRM flips true MID-SESSION => an already-active subscriber is torn down centrally
  *       (the M2 defect: a naive reactive fix guards new enrolment but never withdraws).
- *   (f) a `sequence` one-shot rides the same chain — starts it, completes on a late tick,
- *       self-unsubscribes, and the chain disarms.
+ *   (f) a `sequence` one-shot rides the continuous rAF chain — starts it, completes on a
+ *       late tick, self-unsubscribes, and the scheduler disarms.
+ *   (g) the sleeping steady state — a frame-only page parks on the beat timer with NO rAF
+ *       outstanding, lands exactly ONE rAF per beat, re-parks after each tick; a live
+ *       sequence supersedes the park with the continuous chain and completion falls back
+ *       to parking (the T3-W13 P1 contract: the settled page's vsync heartbeat is dead).
  */
 
 import { effectScope, nextTick, ref } from 'vue';
 
-// ── A controllable rAF + matchMedia stub installed on a global `window` ──────
+// ── A controllable rAF + setTimeout + matchMedia stub installed globally ─────
 
-let rafArmCount = 0; // total requestAnimationFrame() calls (a proxy for "armed")
+let rafArmCount = 0; // total requestAnimationFrame() calls
 let cancelCount = 0; // total cancelAnimationFrame() calls
+let timerArmCount = 0; // total setTimeout() calls (the beat park)
+let timerCancelCount = 0; // total clearTimeout() calls of a pending timer
 let pendingCb: ((t: number) => void) | null = null;
+const pendingTimers = new Map<number, () => void>();
 let nextRafId = 1;
+let nextTimerId = 1;
 let reduceMotion = false;
 
 // The scheduler subscribes its matchMedia 'change' handler exactly ONCE at module load;
@@ -37,8 +48,12 @@ const prmChangeListeners: Array<(e: { matches: boolean }) => void> = [];
 function installEnv(): void {
   rafArmCount = 0;
   cancelCount = 0;
+  timerArmCount = 0;
+  timerCancelCount = 0;
   pendingCb = null;
+  pendingTimers.clear();
   nextRafId = 1;
+  nextTimerId = 1;
 
   const win = {
     requestAnimationFrame(cb: (t: number) => void): number {
@@ -49,6 +64,15 @@ function installEnv(): void {
     cancelAnimationFrame(_id: number): void {
       cancelCount += 1;
       pendingCb = null;
+    },
+    setTimeout(cb: () => void, _delay?: number): number {
+      timerArmCount += 1;
+      const id = nextTimerId++;
+      pendingTimers.set(id, cb);
+      return id;
+    },
+    clearTimeout(id: number): void {
+      if (pendingTimers.delete(id)) timerCancelCount += 1;
     },
     matchMedia(query: string) {
       return {
@@ -66,6 +90,11 @@ function installEnv(): void {
   g.window = win;
   g.requestAnimationFrame = win.requestAnimationFrame;
   g.cancelAnimationFrame = win.cancelAnimationFrame;
+  // The scheduler's beat park calls bare `setTimeout`/`clearTimeout`, which resolve to
+  // globalThis at call time — safe to stub here: nothing else in the proof's own flow
+  // (Vue's nextTick is microtask-based) schedules macrotask timers.
+  g.setTimeout = win.setTimeout;
+  g.clearTimeout = win.clearTimeout;
   g.matchMedia = win.matchMedia;
   // No `document` => the visibilitychange listener registration is skipped.
 }
@@ -76,25 +105,37 @@ function setReduceMotion(v: boolean): void {
   for (const l of prmChangeListeners) l({ matches: v });
 }
 
-/** Advance the stubbed rAF loop by one tick at the wall clock (re-arms via the scheduler). */
-function pump(times = 1): void {
-  for (let i = 0; i < times; i++) {
-    const cb = pendingCb;
-    pendingCb = null;
-    if (cb) cb(performance.now());
+/** Fire every pending beat timer (the wake arms the scheduler's ONE landing rAF). */
+function fireTimers(): void {
+  for (const [id, cb] of [...pendingTimers]) {
+    pendingTimers.delete(id);
+    cb();
   }
 }
 
-/** Advance the loop with an explicit timestamp (for driving a sequence tween to completion). */
-function pumpAt(t: number): void {
+/** Fire the pending rAF callback, if any, at an explicit timestamp. */
+function fireRaf(t = performance.now()): void {
   const cb = pendingCb;
   pendingCb = null;
   if (cb) cb(t);
 }
 
-/** Is the singleton scheduler currently armed (a frame is pending)? */
+/** Advance one full scheduler cycle: land any pending beat wake, then tick its rAF. */
+function pump(times = 1): void {
+  for (let i = 0; i < times; i++) {
+    fireTimers();
+    fireRaf();
+  }
+}
+
+/** Tick the pending rAF with an explicit timestamp (drives a sequence tween to completion). */
+function pumpAt(t: number): void {
+  fireRaf(t);
+}
+
+/** Is the singleton scheduler currently armed (a beat timer OR a rAF is pending)? */
 function armed(): boolean {
-  return pendingCb !== null;
+  return pendingCb !== null || pendingTimers.size > 0;
 }
 
 // ── Tiny assertion harness ───────────────────────────────────────────────────
@@ -138,7 +179,7 @@ const { useLineBoil, usePrefersReducedMotion, createSequenceSubscription, schedu
   scope.run(() => useLineBoil(1, 125));
   await nextTick();
   pump(3);
-  assert(rafArmCount === 0, '(a) frameCount=1 mounts => rAF never armed (zero subscriptions)');
+  assert(rafArmCount === 0 && timerArmCount === 0, '(a) frameCount=1 mounts => neither timer nor rAF ever armed');
   assert(!armed(), '(a) frameCount=1 => scheduler not armed after pumps');
   scope.stop();
   await nextTick();
@@ -154,16 +195,16 @@ const { useLineBoil, usePrefersReducedMotion, createSequenceSubscription, schedu
     api = useLineBoil(3, 125);
   });
   await nextTick();
-  assert(rafArmCount >= 1, '(b) frameCount=3 mounts => rAF armed (scheduler running)');
-  assert(armed(), '(b) frameCount=3 => a frame is pending');
+  assert(timerArmCount >= 1, '(b) frameCount=3 mounts => scheduler armed (parked on the beat timer)');
+  assert(armed(), '(b) frameCount=3 => a wake is pending');
   pump(5);
   assert(armed(), '(b) frameCount=3 => scheduler re-arms across ticks');
 
+  const timerCancelsBefore = timerCancelCount;
   api!.stop();
-  const cancelsBefore = cancelCount;
   pump(1);
   pump(1);
-  assert(cancelCount >= cancelsBefore, '(b) unmount => cancelAnimationFrame fired (disarmed)');
+  assert(timerCancelCount > timerCancelsBefore, '(b) unmount => pending beat wake cancelled (disarmed)');
   assert(!armed(), '(b) unmount => scheduler stops re-arming (zero subscribers => disarmed)');
   scope.stop();
   await nextTick();
@@ -177,7 +218,7 @@ const { useLineBoil, usePrefersReducedMotion, createSequenceSubscription, schedu
   scope.run(() => useLineBoil(3, 125));
   await nextTick();
   pump(3);
-  assert(rafArmCount === 0, '(c) PRM=reduce + frameCount=3 => rAF never armed (independent gate)');
+  assert(rafArmCount === 0 && timerArmCount === 0, '(c) PRM=reduce + frameCount=3 => never armed (independent gate)');
   assert(!armed(), '(c) PRM=reduce => scheduler not armed');
   assert(usePrefersReducedMotion().value === true, '(c) usePrefersReducedMotion() reflects the live state');
   scope.stop();
@@ -194,18 +235,18 @@ const { useLineBoil, usePrefersReducedMotion, createSequenceSubscription, schedu
   scope.run(() => useLineBoil(frames, 125));
   await nextTick();
   pump(2);
-  assert(rafArmCount === 0, '(d) starts at frameCount=1 => not armed during draw phase');
+  assert(rafArmCount === 0 && timerArmCount === 0, '(d) starts at frameCount=1 => not armed during draw phase');
 
   frames.value = 3;
   await nextTick();
   assert(armed(), '(d) frameCount 1->3 => enrols & arms after the draw');
 
+  const timerCancelsBefore = timerCancelCount;
   frames.value = 1;
   await nextTick();
-  const cancelsBefore = cancelCount;
   pump(1);
   pump(1);
-  assert(cancelCount >= cancelsBefore, '(d) frameCount 3->1 => withdraws (cancelAnimationFrame fired)');
+  assert(timerCancelCount > timerCancelsBefore, '(d) frameCount 3->1 => withdraws (pending wake cancelled)');
   assert(!armed(), '(d) frameCount 3->1 => scheduler disarms (no other subscribers)');
   scope.stop();
   await nextTick();
@@ -220,10 +261,10 @@ const { useLineBoil, usePrefersReducedMotion, createSequenceSubscription, schedu
   await nextTick();
   assert(armed(), '(e) frameCount=3 arms before PRM engages');
 
-  const cancelsBefore = cancelCount;
+  const timerCancelsBefore = timerCancelCount;
   setReduceMotion(true); // central force-clear reaches the active subscriber
   await nextTick();
-  assert(cancelCount >= cancelsBefore, '(e) PRM engage mid-session => rAF cancelled');
+  assert(timerCancelCount > timerCancelsBefore, '(e) PRM engage mid-session => pending wake cancelled');
   assert(!armed(), '(e) PRM engage mid-session => active subscriber torn down (not just gated)');
   assert(schedulerDebugInfo().subscribers === 0, '(e) PRM engage => subscribers force-cleared');
   scope.stop();
@@ -248,7 +289,7 @@ const { useLineBoil, usePrefersReducedMotion, createSequenceSubscription, schedu
     },
   });
   seq.start();
-  assert(armed(), '(f) sequence.start() arms the shared chain');
+  assert(pendingCb !== null, '(f) sequence.start() arms the continuous rAF chain (not the beat park)');
   assert(schedulerDebugInfo().kinds.sequence === 1, '(f) one sequence subscriber enrolled');
 
   pumpAt(t0 + 10_000); // a tick well past the 50ms duration => completion
@@ -256,6 +297,52 @@ const { useLineBoil, usePrefersReducedMotion, createSequenceSubscription, schedu
   assert(completed, '(f) sequence fires onComplete');
   assert(!armed(), '(f) completed sequence self-unsubscribes => chain disarms');
   assert(schedulerDebugInfo().subscribers === 0, '(f) no subscribers remain after completion');
+}
+
+// (g) The sleeping steady state — the T3-W13 P1 contract. A frame-only page holds NO
+// outstanding rAF between beats: it parks on ONE beat timer, lands exactly ONE rAF per
+// wake, and re-parks after the tick. A live sequence supersedes the park with the
+// continuous chain; its completion falls back to parking.
+{
+  installEnv();
+  setReduceMotion(false);
+  const scope = effectScope();
+  let api: ReturnType<typeof useLineBoil> | undefined;
+  scope.run(() => {
+    api = useLineBoil(4, 125);
+  });
+  await nextTick();
+
+  assert(rafArmCount === 0, '(g) enrol parks on the beat timer — NO rAF armed at rest');
+  assert(pendingTimers.size === 1, '(g) exactly one beat wake pending');
+  assert(schedulerDebugInfo().parked && schedulerDebugInfo().chains === 0, '(g) debug reads parked, chains=0 (asleep)');
+
+  fireTimers(); // the wake
+  assert(rafArmCount === 1 && pendingCb !== null, '(g) the wake lands exactly ONE rAF');
+  assert(pendingTimers.size === 0, '(g) no timer pending while the landing rAF is in flight');
+
+  fireRaf();
+  assert(pendingCb === null, '(g) the tick consumes its rAF — the chain does not respin on vsync');
+  assert(pendingTimers.size === 1, '(g) the tick re-parks on the next beat boundary');
+
+  const rafsBefore = rafArmCount;
+  pump(3);
+  assert(rafArmCount === rafsBefore + 3, '(g) exactly one rAF per beat across cycles (no extra frames)');
+  assert(pendingTimers.size === 1 && pendingCb === null, '(g) steady state is timer-parked after every cycle');
+
+  // A live sequence supersedes the park: continuous chain while it runs, park after.
+  const seq = createSequenceSubscription({ durationMs: 50, onProgress: () => {} });
+  seq.start();
+  assert(pendingCb !== null && pendingTimers.size === 0, '(g) a live sequence supersedes the park — continuous chain');
+  fireRaf();
+  assert(pendingCb !== null, '(g) the chain stays continuous while the sequence runs');
+  pumpAt(performance.now() + 10_000); // completes the sequence; the frame subscriber remains
+  assert(pendingCb === null && pendingTimers.size === 1, '(g) sequence completion falls back to beat parking');
+
+  api!.stop();
+  scope.stop();
+  await nextTick();
+  assert(!armed(), '(g) withdrawal disarms both wake shapes');
 }
 
 // ── Report ───────────────────────────────────────────────────────────────────

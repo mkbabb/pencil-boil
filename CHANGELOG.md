@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.8.0 — 2026-07-11 (tranche-3 W13 §1-P1 release)
+
+The scheduler retimed off vsync — the tick is a poll no more; the beat is a clock.
+
+The frame-only steady state no longer spins a perpetual rAF chain (the old shape polled an
+8Hz stop-motion clock at vsync resolution: ~98 empty BeginMainThreadFrame/s on a settled
+page, measured in the T3-W13 audit). It now PARKS: `setTimeout` aimed at the earliest
+active frame subscriber's next beat boundary → ONE `requestAnimationFrame` to land the
+writes inside a frame → sleep. Between beats there is no outstanding rAF and no main-thread
+frame scheduling on the scheduler's account. Per-subscriber `lastTick` anchor arithmetic
+keeps the beat drift-free regardless of wake jitter (a few ms at 8fps is sub-perceptual).
+
+`sequence` subscribers (draw-ins, flourishes, tweens) keep the continuous rAF chain WHILE
+they run — any active sequence supersedes the park; completion falls back to it. PRM and
+tab-visibility gates carry unchanged, now cancelling whichever wake shape is pending
+(hidden-tab `setTimeout` throttling is a second free layer of the same parking). The
+single-tick invariant strengthens the old single-chain one: at most ONE pending wake —
+beat timer or rAF, never both.
+
+Every public signature carries forward unchanged. `schedulerDebugInfo()` gains a `parked`
+field; its `chains` still truthfully reads the live rAF, so a settled boiling page now
+reports `chains: 0, parked: true` with a one-frame `chains: 1` blip as each beat lands.
+Proof (g) locks the sleeping steady state: no rAF at rest, exactly one rAF per beat,
+re-park after every tick, sequence supersede-and-fallback, withdrawal disarms both shapes.
+
 ## 0.7.0 — 2026-07-10 (tranche-2 W5 release)
 
 Prebake + draw-in surface, hoisted out of the consumer that hand-rolled it.

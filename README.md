@@ -28,7 +28,7 @@ import {
 | `path.ts`        | `wobbleLine`, `wobbleRect`, `wobbleLinePoints`, `perturbPoints`, `catmullRomToBezier`, `pointsToLinear`, `boilLineFrames`, `boilRectFrames`, `ellipsePoints`                       | Path generation, serialization, prebake    |
 | `celestial.ts`   | `wobbleDiamond`, `wobbleStarPolygon`, `generateSunRays`                                                                                                                            | Decorative polygon helpers                 |
 | `frames.ts`      | `useBoilCache`, `useBoilFrames`                                                                                                                                                    | LRU memoizer for prebaked boil work        |
-| `vue.ts`         | `useLineBoil`/`useBoilFrame`, `useFilterParamBoil`, `createBoilTicker`, `createSequenceSubscription`, `createStrokeDrawIn`, `usePrefersReducedMotion`, `schedulerDebugInfo`       | The one-chain rAF scheduler + tween/draw-in |
+| `vue.ts`         | `useLineBoil`/`useBoilFrame`, `useFilterParamBoil`, `createBoilTicker`, `createSequenceSubscription`, `createStrokeDrawIn`, `usePrefersReducedMotion`, `schedulerDebugInfo`       | The beat-parked scheduler + tween/draw-in  |
 | `boilHoldGate.ts` | `acquireHold`, `releaseHold`, `isBoilHeld`, `heldFrameCount`                                                                                                                       | Freeze the boil in place (hold-to-peek)    |
 
 ## Animation model
@@ -148,9 +148,10 @@ const { currentFrame } = useLineBoil(frameCount, 125);
 const d = computed(() => frames[currentFrame.value]);
 ```
 
-`createStrokeDrawIn(pathEl, { durationMs, easing })` rides the same one rAF chain to draw a
-path on by hand (stroke-dashoffset from its full length to `0`), settling to a solid stroke on
-completion and painting the end state immediately under `prefers-reduced-motion`.
+`createStrokeDrawIn(pathEl, { durationMs, easing })` rides the scheduler's continuous chain
+(a transient `sequence` subscriber) to draw a path on by hand (stroke-dashoffset from its full
+length to `0`), settling to a solid stroke on completion and painting the end state immediately
+under `prefers-reduced-motion`.
 
 ## Celestial helpers
 

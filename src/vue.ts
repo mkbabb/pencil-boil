@@ -1,8 +1,8 @@
 /**
- * Unified frame-index scheduler — one rAF chain, app-wide.
+ * Unified frame-index scheduler — one beat-aligned tick, app-wide, asleep between beats.
  *
  * Every boil consumer funnels into the SAME module-level `subscribers` Set and the
- * SAME single `requestAnimationFrame` chain:
+ * SAME single scheduler tick:
  *
  * - path-boil frame cycling — `useLineBoil` (aliased `useBoilFrame`): advance a
  *   discrete frame ref modulo a frame total every N ms.
@@ -12,8 +12,22 @@
  * - one-shot eased draw-ins / flourishes — `createSequenceSubscription` (the
  *   `sequence` kind: a wall-clock tween that self-unsubscribes on completion).
  *
- * However many things want to advance on a clock, there is exactly one rAF callback
- * doing the advancing.
+ * However many things want to advance on a clock, there is exactly one tick doing the
+ * advancing — and the tick is timed to the clock it serves, not to vsync:
+ *
+ * - `frame` subscribers are a BEAT (a ~125ms stop-motion clock), so the scheduler
+ *   parks on a `setTimeout` aimed at the earliest subscriber's next boundary, wakes,
+ *   lands the writes inside ONE `requestAnimationFrame` (no tearing), and sleeps
+ *   again. Between beats there is NO outstanding rAF and the main thread schedules
+ *   no frames on the scheduler's account. (The old shape — a perpetual rAF chain
+ *   polling an 8Hz clock at vsync resolution — cost ~98 empty main frames/s on a
+ *   settled page; measured in the T3-W13 audit, `b1-test-g.json`: 0 paints, 98.4
+ *   BeginMainThreadFrame/s.) Timer jitter of a few ms at 8fps stop-motion is
+ *   sub-perceptual; the per-subscriber `lastTick` anchor arithmetic keeps the beat
+ *   drift-free regardless of when the wake actually fires.
+ * - `sequence` subscribers are eased tweens that want every frame WHILE they run, so
+ *   any active sequence holds the continuous rAF chain — transient by construction
+ *   (they self-unsubscribe), after which the scheduler falls back to beat parking.
  *
  * Two gates apply uniformly to every subscriber, whichever call shape enrolled it:
  *
@@ -26,10 +40,11 @@
  *    the imperative (`createBoilTicker` / `createSequenceSubscription`) handles, which
  *    aren't Vue-reactive at all (created well after any component's synchronous setup, so
  *    they have no watchEffect to hook into).
- * 2. Tab visibility — cancels the rAF on `hidden` (0 ticks), resets every active frame
- *    subscriber's `lastTick` on `visible`, then resumes the one chain ONLY if a
- *    subscriber is still active (a page of zero subscribers never resumes an empty
- *    idle loop).
+ * 2. Tab visibility — cancels the pending wake (beat timer or rAF) on `hidden`
+ *    (0 ticks), resets every active frame subscriber's `lastTick` on `visible`, then
+ *    re-arms ONLY if a subscriber is still active (a page of zero subscribers never
+ *    resumes an empty idle loop). Hidden-tab `setTimeout` throttling is a second,
+ *    free layer of the same parking should a wake ever slip the gate.
  */
 
 import {
@@ -85,21 +100,38 @@ type Subscriber = FrameSubscriber | SequenceSubscriber;
 
 const subscribers = new Set<Subscriber>();
 let rafId: number | null = null;
+let beatTimer: ReturnType<typeof setTimeout> | null = null;
+let beatDue = Infinity; // performance-clock ms of the pending beat wake (Infinity = none)
 let schedulerRunning = false;
 
-// ── single-chain invariant ──
-// `startChain`/`stopChain` are the ONLY places a rAF handle is created or cancelled
-// outside `schedulerTick`'s own tail, and `startChain` is idempotent on `rafId`. Every
-// path (enrol, visibility resume, PRM) funnels through them, so there is provably at most
-// one outstanding `schedulerTick` at any instant — a resume that races the browser's frame
-// commit can never spawn a second, untracked loop.
+// ── single-tick invariant ──
+// At any instant the scheduler holds AT MOST ONE pending wake: either a beat timer
+// (`beatTimer`, frame-only parking) or an outstanding rAF (`rafId`, a beat landing its
+// writes / a sequence holding the continuous chain) — never both. `startChain`/`armBeat`/
+// `stopChain` are the ONLY places either handle is created or cancelled outside
+// `schedulerTick`'s own tail; `startChain` is idempotent on `rafId` and supersedes any
+// pending beat timer. Every path (enrol, visibility resume, PRM, the tick tail) funnels
+// through `armScheduler`, so a resume that races the browser's frame commit can never
+// spawn a second, untracked loop.
 
+function clearBeatTimer() {
+  if (beatTimer !== null) {
+    clearTimeout(beatTimer);
+    beatTimer = null;
+  }
+  beatDue = Infinity;
+}
+
+/** Arm the CONTINUOUS rAF chain (sequence mode / the one frame that lands a beat). */
 function startChain() {
-  if (rafId !== null || typeof requestAnimationFrame === 'undefined') return;
+  if (typeof requestAnimationFrame === 'undefined') return;
+  if (rafId !== null) return;
+  clearBeatTimer(); // the chain supersedes a pending beat wake — one pending tick, ever
   rafId = requestAnimationFrame(schedulerTick);
 }
 
 function stopChain() {
+  clearBeatTimer();
   if (rafId !== null) {
     cancelAnimationFrame(rafId);
     rafId = null;
@@ -111,6 +143,59 @@ function hasActiveSubscriber(): boolean {
     if (sub.active) return true;
   }
   return false;
+}
+
+function hasActiveSequence(): boolean {
+  for (const sub of subscribers) {
+    if (sub.active && sub.kind === 'sequence') return true;
+  }
+  return false;
+}
+
+/**
+ * Park until the earliest active frame subscriber's next beat boundary, then land the
+ * writes inside ONE rAF (the timer callback arms the chain; the tick tail re-parks).
+ *
+ * A fresh subscriber (`lastTick === 0`) anchors to enrolment time here — the same
+ * "first boundary is one interval out" semantics the perpetual chain's first tick gave
+ * it. An interval that shortens mid-sleep waits out the already-pending wake (at most
+ * one stale beat, self-correcting on the next park); one that lengthens costs at most
+ * one idle wake (steps=0) before re-parking on the new boundary.
+ */
+function armBeat() {
+  if (rafId !== null) return; // a tick is in flight — its tail re-arms
+  const now = performance.now();
+  let due = Infinity;
+  for (const sub of subscribers) {
+    if (!sub.active || sub.kind !== 'frame') continue;
+    if (sub.lastTick === 0) sub.lastTick = now;
+    const subDue = sub.lastTick + sub.getInterval();
+    if (subDue < due) due = subDue;
+  }
+  if (due === Infinity) return; // no active frame subscriber — nothing to wake for
+  if (beatTimer !== null) {
+    if (due >= beatDue - 1) return; // the pending wake already covers this boundary
+    clearBeatTimer(); // an earlier boundary enrolled — re-aim the wake
+  }
+  beatDue = due;
+  beatTimer = setTimeout(() => {
+    beatTimer = null;
+    beatDue = Infinity;
+    // A cancel (PRM engage / tab hidden) clears this timer, but guard anyway — a wake
+    // that somehow outlives a disarm must not resurrect the scheduler.
+    if (!schedulerRunning) return;
+    startChain();
+  }, Math.max(0, due - now));
+}
+
+/**
+ * The one dispatch point: any active sequence holds the continuous rAF chain (it wants
+ * every frame, transiently); a frame-only page parks on the beat timer and sleeps.
+ */
+function armScheduler() {
+  if (!schedulerRunning || typeof requestAnimationFrame === 'undefined') return;
+  if (hasActiveSequence()) startChain();
+  else armBeat();
 }
 
 function schedulerTick(timestamp: number) {
@@ -147,17 +232,21 @@ function schedulerTick(timestamp: number) {
       sub.onComplete();
     }
   }
-  // A finished sequence may have been the last active subscriber — shut the chain down so a
-  // settled page returns to the ambient floor rather than spinning empty.
+  // The rAF that carried this tick is consumed; whatever comes next is a fresh arm.
+  rafId = null;
+  // A finished sequence may have been the last active subscriber — shut the scheduler
+  // down so a settled page returns to the ambient floor rather than spinning empty.
   maybeStopScheduler();
-  // Continue the one chain only while running — a tick that fires after a cancel (PRM
-  // engage / tab hidden raced the browser's frame commit) must not resurrect it.
-  rafId = schedulerRunning ? requestAnimationFrame(schedulerTick) : null;
+  // Re-arm only while running — a tick that fires after a cancel (PRM engage / tab
+  // hidden raced the browser's frame commit) must not resurrect the scheduler. Live
+  // sequences keep the continuous chain; a frame-only page parks back on the beat
+  // timer and the main thread sleeps until the next boundary.
+  if (schedulerRunning) armScheduler();
 }
 
 function ensureScheduler() {
   schedulerRunning = true;
-  startChain();
+  armScheduler();
 }
 
 function maybeStopScheduler() {
@@ -172,15 +261,15 @@ function maybeStopScheduler() {
 if (typeof document !== 'undefined') {
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
-      stopChain(); // 0 ticks; schedulerRunning is left intact for resume
+      stopChain(); // 0 ticks (beat timer AND rAF both cancelled); schedulerRunning is left intact for resume
     } else if (schedulerRunning && hasActiveSubscriber()) {
       // Resume ONLY with a live subscriber — a page whose marks all withdrew while hidden
-      // (or never enrolled) must not resume an empty idle rAF loop. Frame subscribers reset
+      // (or never enrolled) must not resume an empty idle loop. Frame subscribers reset
       // their wall-clock anchor so an elapsed-time jump can't fast-forward every frame index
       // at once. Sequence one-shots have no `lastTick`: a tween that would have finished
       // while hidden completes on the first resumed tick — the correct end state.
       for (const sub of subscribers) if (sub.kind === 'frame') sub.lastTick = 0;
-      startChain(); // idempotent — resume can never double the chain
+      armScheduler(); // idempotent — resume can never double the pending wake
     } else {
       // No active subscriber: disarm cleanly rather than leaving `schedulerRunning` dangling.
       schedulerRunning = false;
@@ -452,10 +541,14 @@ export function createStrokeDrawIn(
 // ── instrumentation hook — reports the live chain/subscriber floor ──
 //
 // `chains` reads `rafId`, not `schedulerRunning`, so a hidden tab / PRM-engaged state
-// truthfully reads 0 (no rAF outstanding) even while subscribers are retained.
+// truthfully reads 0 (no rAF outstanding) even while subscribers are retained — and so
+// does a beat-PARKED steady state (asleep between beats), which reports `chains: 0,
+// parked: true`. A settled boiling page samples as parked nearly always, with a
+// one-frame `chains: 1` blip as each beat lands.
 
 export function schedulerDebugInfo(): {
   chains: number;
+  parked: boolean;
   subscribers: number;
   kinds: { frame: number; sequence: number };
 } {
@@ -467,6 +560,7 @@ export function schedulerDebugInfo(): {
   }
   return {
     chains: rafId !== null ? 1 : 0,
+    parked: beatTimer !== null,
     subscribers: subscribers.size,
     kinds: { frame, sequence },
   };
