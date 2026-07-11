@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.1 — 2026-07-11
+
+One clock for the beat, end to end. 0.8.0's tick elapsed frame subscribers on the rAF
+animation timestamp while the beat timer aims in `performance.now()` terms — and the frame
+timestamp trails the wall clock by a few ms, so the wake's own tick read `elapsed <
+interval`, advanced nothing, and burned a steps=0 retry frame EVERY beat (2 rAF/beat,
+traced live: 16 main frames/s where 8 was the contract). Frame subscribers now elapse on
+`performance.now()` — the clock the timer aims with; sequences keep the rAF timestamp
+(they're animations, frame time is their truth). Traced after: 7.98 main frames/s at an
+8Hz beat — exactly one rAF per beat.
+
 ## 0.8.0 — 2026-07-11 (tranche-3 W13 §1-P1 release)
 
 The scheduler retimed off vsync — the tick is a poll no more; the beat is a clock.

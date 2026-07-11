@@ -199,6 +199,14 @@ function armScheduler() {
 }
 
 function schedulerTick(timestamp: number) {
+  // Frame subscribers elapse on the WALL clock, not the rAF timestamp: the beat timer aims
+  // at `lastTick + interval` in performance.now() terms, and the rAF animation timestamp
+  // trails performance.now() by a few ms — measured on the frame timestamp, the wake's own
+  // tick reads elapsed < interval, advances nothing, and burns a steps=0 retry frame EVERY
+  // beat (2 rAF/beat, traced in the T3-W13 gate). One clock for the beat, end to end.
+  // Sequences keep the rAF timestamp — they're animations, and frame time is their truth
+  // (their performance.now()-anchored start is ±one frame of skew, documented at `start`).
+  const wallNow = performance.now();
   // Sequence subscribers self-remove on completion; collect them and fire onComplete AFTER
   // the iteration so a chained flourish enrolled in a callback can't re-enter this same loop
   // (it ticks on the next frame instead).
@@ -207,8 +215,8 @@ function schedulerTick(timestamp: number) {
     if (!sub.active) continue;
     if (sub.kind === 'frame') {
       const interval = sub.getInterval();
-      if (sub.lastTick === 0) sub.lastTick = timestamp;
-      const elapsed = timestamp - sub.lastTick;
+      if (sub.lastTick === 0) sub.lastTick = wallNow;
+      const elapsed = wallNow - sub.lastTick;
       if (elapsed >= interval) {
         const steps = Math.floor(elapsed / interval);
         sub.lastTick += steps * interval;
