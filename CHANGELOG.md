@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.9.1 — 2026-07-13 (tranche-4 W5 currency)
+
+Currency bump — no library surface change; the dep set catches up and the toolchain
+contract lands in the manifest.
+
+`vue` devDep floats to **3.5.39**, which pulls `@vue/compiler-sfc@3.5.39 → postcss@8.5.18`
+and kills the one live advisory the lockfile carried: **GHSA-qx2v-qp2m-jg93** (PostCSS XSS
+via an unescaped `</style>` in the CSS stringify output, `postcss <8.5.10`). `npm audit` now
+reads **0 vulnerabilities**; any downstream that lints or builds the SFC path stops
+inheriting it.
+
+`typescript` devDep jumps two majors, `^5.7.0 → ^7.0.2` (the Go-port native compiler).
+`tsc --noEmit` (the `check` gate), the full proof suite, and the Playwright browser proofs
+all pass clean under 7.0.2 — the proofs run on Node's native type-stripping, so the major
+touches only the type gate, which stays green.
+
+`engines` and `packageManager` now declare the contract the tree only ever documented in
+prose: `node >=24`, `npm >=11` (npm 10 mis-resolves the lockfile), pinned to `npm@11.12.1`.
+A fresh clone on an old npm now trips a gate instead of a silent mis-resolution.
+
 ## 0.9.0 — 2026-07-12 (tranche-4 W1 release)
 
 Bake once, swap forever — the WebKit raster cure, shipped as library surface.
