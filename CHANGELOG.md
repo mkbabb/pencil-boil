@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.9.2 — 2026-07-13 (tranche-4 WM mobile recut — the residency seam)
+
+`useBoilCache` / `useBoilFrames` gain a fourth argument, `onEvict?: (value) => void` — a
+**per-value disposer** bound to a stored value at its first miss and invoked once, with that
+value, when it leaves the cache by LRU eviction. It is the disposal seam a cached native
+resource needs: the GC cannot reclaim an `ImageBitmap`'s off-heap decoded pixels, so a raster
+consumer passes `(bitmap) => bitmap.close()` and the LRU stops accreting dead bitmaps as the
+board/theme churns. Binding the disposer **per value, not per call** is load-bearing — the
+shared LRU mixes types, so a bitmap consumer that evicts a plain frame-array entry runs the
+array's disposer (none), never `close` on a string. Back-compatible: the arg is optional and
+the two-/three-arg calls are unchanged.
+
+`useRasterStack` no longer memoizes its per-pose bitmaps through the shared LRU — it captures
+each pose **fresh per bake**. The consumer of a raster stack now owns each bitmap's lifecycle
+(convert it to an object URL for the `<image>`/`<img>` decode, then `close()` the redundant
+bitmap), so the double residency — the decoded `<image>` PLUS the retained `ImageBitmap` of
+the same pixels — dies. A cross-bake memo would have re-handed a consumer-closed bitmap to a
+warm re-bake (a poisoned re-display); fresh-per-bake is the price of letting the redundant
+copy be freed. A warm theme flip-back re-rasterizes instead of reusing — cheap under the
+Bloom mask and a DPR cap, and it never risks a closed bitmap.
+
 ## 0.9.1 — 2026-07-13 (tranche-4 W5 currency)
 
 Currency bump — no library surface change; the dep set catches up and the toolchain

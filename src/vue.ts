@@ -59,7 +59,6 @@ import {
   type Ref,
 } from 'vue';
 import { easeOutCubic, linear, type Easing } from './easings';
-import { useBoilCache } from './frames';
 import { rasterizePose, type RasterStackOptions } from './raster';
 
 function normalizeFrameCount(value: number): number {
@@ -419,10 +418,11 @@ export function useFilterParamBoil(
 // WebKit, ~2 cores at idle), capture each frozen pose to an ImageBitmap ONCE (`raster.ts`)
 // and opacity-swap the bitmaps on the beat — no filter re-executes at steady state, in
 // either engine. This composable orchestrates the bake: it drives `pose` off the shared
-// beat (through `useLineBoil`, so the same scheduler/PRM/visibility gates carry), memoizes
-// each ImageBitmap through `useBoilCache` under `(cacheKey, pose, dpr, cssSize)` — the
-// consumer folds theme into `cacheKey` — and exposes `bitmaps` (null until the bake
-// resolves; render the live-filter fallback while null), `ready`, `pose`, and `rebake`.
+// beat (through `useLineBoil`, so the same scheduler/PRM/visibility gates carry), captures
+// each pose FRESH per bake (no cross-bake bitmap memo — the consumer owns the bitmap: it
+// converts each to an object URL and `close()`s it, so a memoized-then-closed bitmap can
+// never be re-handed to a warm re-bake), and exposes `bitmaps` (null until the bake resolves;
+// render the live-filter fallback while null), `ready`, `pose`, and `rebake`.
 //
 // RE-BAKE TRIGGERS (each changes the captured pixels, so the bitmaps go stale):
 //   • DPR change — the window dragged between monitors; watched via a self-re-arming
@@ -480,19 +480,14 @@ export function useRasterStack(
     const o = toValue(opts);
     const dpr =
       o.dpr ?? (Number.isFinite(window.devicePixelRatio) ? window.devicePixelRatio : 1);
-    const { width, height } = o.cssSize;
     const captures: Promise<ImageBitmap>[] = [];
     for (let p = 0; p < o.poseCount; p++) {
-      const svg = o.poseSvg(p);
-      // Each bitmap is memoized under (cacheKey, pose, dpr, cssSize): a re-mount or a flip
-      // back to a warm theme reuses the cached bake. The cache holds the capture PROMISE, so
-      // concurrent consumers of one key share a single bake.
-      captures.push(
-        useBoilCache(
-          [o.cacheKey, 'raster', p, dpr, width, height],
-          () => rasterizePose(svg, o.cssSize, dpr),
-        ),
-      );
+      // Capture fresh, NOT through the shared boil LRU: the consumer converts each resolved
+      // bitmap to an object URL and closes it (the URL/decode is the durable render artifact,
+      // the bitmap the redundant copy). A memoized bitmap that the consumer closed would
+      // resolve CLOSED on a warm re-bake — a poisoned re-display. Fresh-per-bake is the cost
+      // of letting the double residency die; the re-bake is masked (Bloom) and DPR-capped.
+      captures.push(rasterizePose(o.poseSvg(p), o.cssSize, dpr));
     }
     try {
       const baked = await Promise.all(captures);
