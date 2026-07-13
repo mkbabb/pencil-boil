@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.9.0 — 2026-07-12 (tranche-4 W1 release)
+
+Bake once, swap forever — the WebKit raster cure, shipped as library surface.
+
+WebKit does not cache a filtered-SVG raster across an opacity flip: a resident
+`feTurbulence + feDisplacementMap` stack re-executes the whole filter chain in the GPU
+process on every beat (~150–224 ms board-area raster on the critical frame path, ~2 cores
+at idle, single-digit fps). The cure is to capture each frozen pose to an `ImageBitmap`
+ONCE and opacity-swap the bitmaps on the beat — no filter re-executes at steady state, in
+either engine.
+
+`raster.ts` (browser-only, framework-agnostic — no `vue` import) is the capture.
+`serializePoseSvg` frames structured `PoseSvgParts` into a self-contained SVG document;
+`isSelfContainedSvg` is the Node-provable half of the identity guard (a `currentColor` /
+`var()` leak fails deterministically without a browser); `rasterizePose` captures one
+self-contained pose to a bitmap at device DPR via same-origin SVG→`Blob`→`drawImage`,
+throwing on a cascade leak rather than baking a fallback color into the pixels; and
+`rasterizePoseStack` captures the whole pose-indexed array in one call.
+
+`useRasterStack(opts, stepEveryBeats?)` (`vue.ts`) orchestrates the bake: the pose advances
+off the shared beat (through `useLineBoil`, so the same scheduler / PRM / visibility gates
+carry), each bitmap memoizes through `useBoilCache` under `(cacheKey, pose, dpr, cssSize)`,
+and it re-bakes on the pixel-changing triggers — DPR (a monitor drag), theme flip (the
+consumer folds theme into `cacheKey`), and `document.fonts.ready` (a `<text>` pose must bake
+the real face, not the fallback). `bitmaps` is null while a bake is in flight, so the
+consumer holds the live-filter fallback (one filtered raster per appearance, the sanctioned
+transient); a monotonic bake token discards a superseded resolution.
+
+The identity gate the Node harness cannot see (no canvas / `ImageBitmap` / SVG layout) now
+runs in a real engine: `npm run proof:browser` (Playwright) exercises the SHIPPED
+`rasterizePose` in chromium AND webkit at DPR2 and asserts untainted + byte-identical
+re-raster + distinct-per-pose + capture-vs-live SSIM >= 0.98 — a per-engine tolerance floor,
+not equality, because WebKit's canvas-filter and compositor-filter paths diverge ~1px at
+displacement edges by design (there is NO cross-engine parity gate; `feTurbulence` differs
+by engine). CI gains a `browser-proof` job alongside the existing `gates`.
+
+`useBoilFrame` (the `useLineBoil` alias) is DROPPED — one canonical name for the frame
+cycler.
+
+The changesets rig is retired: `.changeset/` is deleted and releases are cut by hand — bump
+`package.json`, write this `CHANGELOG.md` entry, push a `vX.Y.Z` tag; the tag fires
+`release.yml` (type gate → `npm publish` under `NPM_TOKEN`). CONTRIBUTING documents the
+honest tag-push flow.
+
+Every prior signature carries forward unchanged; the raster surface is purely additive.
+
 ## 0.8.1 — 2026-07-11
 
 One clock for the beat, end to end. 0.8.0's tick elapsed frame subscribers on the rAF
@@ -144,8 +190,8 @@ required upstream; no other surface changed. Exported from `src/index.ts`.
 ## 0.3.0 — 2026-05-28 (G.W5 cohort)
 
 The current published version, seeded as the initial CHANGELOG entry as part of the
-muster tranche G release-engineering wave (G.W5 sub-wave D). Future entries accrete
-from changesets.
+muster tranche G release-engineering wave (G.W5 sub-wave D). Later entries are written
+by hand at each version bump.
 
 `@mkbabb/pencil-boil@0.3.0` ships the hand-drawn line + boil geometry toolkit:
 seeded roughen/boil generators, the `perturbPointsClosed` closed-polygon perturbation,

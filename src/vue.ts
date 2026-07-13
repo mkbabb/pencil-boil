@@ -4,8 +4,8 @@
  * Every boil consumer funnels into the SAME module-level `subscribers` Set and the
  * SAME single scheduler tick:
  *
- * - path-boil frame cycling — `useLineBoil` (aliased `useBoilFrame`): advance a
- *   discrete frame ref modulo a frame total every N ms.
+ * - path-boil frame cycling — `useLineBoil`: advance a discrete frame ref modulo a frame
+ *   total every N ms.
  * - SVG filter `baseFrequency` (or any) per-tick side effect — `useFilterParamBoil`.
  * - imperative glyph wiggle — `createBoilTicker` (ping-pongs a frame index; created
  *   after mount, owns its own start/stop).
@@ -48,14 +48,19 @@
  */
 
 import {
+  computed,
+  onMounted,
   onUnmounted,
   ref,
   toValue,
+  watch,
   watchEffect,
   type MaybeRefOrGetter,
   type Ref,
 } from 'vue';
 import { easeOutCubic, linear, type Easing } from './easings';
+import { useBoilCache } from './frames';
+import { rasterizePose, type RasterStackOptions } from './raster';
 
 function normalizeFrameCount(value: number): number {
   if (!Number.isFinite(value)) return 1;
@@ -343,7 +348,7 @@ function createSubscription(
   return { sub, handle: { start, stop } };
 }
 
-// ── useLineBoil — the frame-cycling composable (aliased `useBoilFrame`) ──
+// ── useLineBoil — the frame-cycling composable ──
 
 /**
  * Vue composable for frame cycling on the shared singleton rAF loop. Returns a
@@ -383,9 +388,6 @@ export function useLineBoil(
   return { currentFrame, start: handle.start, stop: handle.stop };
 }
 
-/** Drop-in alias for {@link useLineBoil} — the name the sudoku consumer imports. */
-export const useBoilFrame = useLineBoil;
-
 // ── useFilterParamBoil — generic per-tick side effect (e.g. SVG filter baseFrequency) ──
 
 /**
@@ -408,6 +410,158 @@ export function useFilterParamBoil(
     handle.stop();
   });
   return handle;
+}
+
+// ── useRasterStack — bitmap pose cache, driven off the shared beat (0.9.0) ──
+//
+// The WebKit cure: instead of a resident filtered stack that re-rasters its feTurbulence +
+// feDisplacementMap chain on every opacity flip (~150–224 ms board-area raster per beat in
+// WebKit, ~2 cores at idle), capture each frozen pose to an ImageBitmap ONCE (`raster.ts`)
+// and opacity-swap the bitmaps on the beat — no filter re-executes at steady state, in
+// either engine. This composable orchestrates the bake: it drives `pose` off the shared
+// beat (through `useLineBoil`, so the same scheduler/PRM/visibility gates carry), memoizes
+// each ImageBitmap through `useBoilCache` under `(cacheKey, pose, dpr, cssSize)` — the
+// consumer folds theme into `cacheKey` — and exposes `bitmaps` (null until the bake
+// resolves; render the live-filter fallback while null), `ready`, `pose`, and `rebake`.
+//
+// RE-BAKE TRIGGERS (each changes the captured pixels, so the bitmaps go stale):
+//   • DPR change — the window dragged between monitors; watched via a self-re-arming
+//     `matchMedia('(resolution: Ndppx)')` at the live ratio.
+//   • theme flip — light↔dark changes ink/line/fill colors; the consumer flips `cacheKey`
+//     and the reactive-opts watch re-bakes (masked by the Bloom gesture at the toggle).
+//   • `document.fonts.ready` — a `<text>` pose (logo Fraunces) must bake AFTER the face
+//     loads, else the bitmap freezes the fallback glyphs; the first bake awaits it.
+// While a (re-)bake is in flight `bitmaps` is null — the consumer keeps the live-filter
+// fallback mounted (one filtered raster per appearance, the sanctioned transient).
+
+const BEAT_MS = 125; // the stop-motion beat useLineBoil defaults to — one clock, app-wide.
+
+export interface RasterStackHandle {
+  /** null until the bake resolves — render the live-filter fallback while null. */
+  bitmaps: Readonly<Ref<ImageBitmap[] | null>>;
+  /** true once every pose bitmap has resolved. */
+  ready: Readonly<Ref<boolean>>;
+  /** current pose index, advanced off the shared beat (`stepEveryBeats` forwarded). */
+  pose: Readonly<Ref<number>>;
+  /** force a re-bake — auto-fired on DPR / theme / font-ready change; call for anything else. */
+  rebake: () => void;
+}
+
+/**
+ * Vue composable for the bitmap pose cache. `opts` is a `RasterStackOptions` (reactive
+ * ref/getter supported — a theme flip that changes `cacheKey`/`cssSize` re-bakes);
+ * `stepEveryBeats` advances the pose once every N shared beats (default 1). See the block
+ * comment above for the re-bake triggers. A single-pose stack never subscribes to the beat.
+ */
+export function useRasterStack(
+  opts: MaybeRefOrGetter<RasterStackOptions>,
+  stepEveryBeats: MaybeRefOrGetter<number> = 1,
+): RasterStackHandle {
+  const bitmaps = ref<ImageBitmap[] | null>(null);
+  const ready = computed(() => bitmaps.value !== null);
+
+  // pose rides the shared beat through useLineBoil — same scheduler, same PRM/visibility
+  // gates. Interval = the beat × stepEveryBeats, so the pose advances every N beats aligned
+  // to the app-wide grid. poseCount <= 1 never subscribes (useLineBoil's static-frame gate):
+  // a single-pose stack holds pose 0, a static bitmap.
+  const { currentFrame: pose } = useLineBoil(
+    () => normalizeFrameCount(toValue(opts).poseCount),
+    () => BEAT_MS * Math.max(1, Math.floor(toValue(stepEveryBeats) || 1)),
+  );
+
+  // A monotonic token supersedes a stale in-flight bake: if opts/DPR change mid-capture, the
+  // older resolution must not clobber the newer bitmaps.
+  let bakeToken = 0;
+
+  async function bake(): Promise<void> {
+    if (typeof document === 'undefined') return; // SSR / off-DOM — nothing to capture
+    const token = ++bakeToken;
+    bitmaps.value = null; // fall back to the live filter while the (re-)bake is in flight
+    const o = toValue(opts);
+    const dpr =
+      o.dpr ?? (Number.isFinite(window.devicePixelRatio) ? window.devicePixelRatio : 1);
+    const { width, height } = o.cssSize;
+    const captures: Promise<ImageBitmap>[] = [];
+    for (let p = 0; p < o.poseCount; p++) {
+      const svg = o.poseSvg(p);
+      // Each bitmap is memoized under (cacheKey, pose, dpr, cssSize): a re-mount or a flip
+      // back to a warm theme reuses the cached bake. The cache holds the capture PROMISE, so
+      // concurrent consumers of one key share a single bake.
+      captures.push(
+        useBoilCache(
+          [o.cacheKey, 'raster', p, dpr, width, height],
+          () => rasterizePose(svg, o.cssSize, dpr),
+        ),
+      );
+    }
+    try {
+      const baked = await Promise.all(captures);
+      if (token === bakeToken) bitmaps.value = baked; // ignore a superseded bake
+    } catch {
+      // Leave bitmaps null — the consumer keeps the live-filter fallback. A hard capture
+      // failure under a fixed key caches the rejection, but the real re-bake triggers (DPR,
+      // theme) mint a new key, so a transient failure does not wedge the surface.
+    }
+  }
+
+  function rebake(): void {
+    void bake();
+  }
+
+  // First bake waits for the font face so a <text> pose bakes the real glyphs, not the
+  // fallback; fonts.ready resolves immediately when nothing is pending. Mount-gated so the
+  // capture only runs client-side.
+  onMounted(() => {
+    const fontsReady =
+      typeof document !== 'undefined' && document.fonts?.ready
+        ? document.fonts.ready
+        : Promise.resolve();
+    void fontsReady.then(() => bake());
+  });
+
+  // theme / cssSize / dpr change through the reactive opts → re-bake, keyed on the stable
+  // capture inputs so an unrelated opts-identity change does not thrash the bake.
+  const stopOptsWatch = watch(
+    () => {
+      const o = toValue(opts);
+      return `${o.cacheKey}|${o.dpr ?? ''}|${o.cssSize.width}x${o.cssSize.height}|${o.poseCount}`;
+    },
+    () => void bake(),
+  );
+
+  // DPR change (monitor drag) → re-bake at the new ratio. matchMedia at the live dpr stops
+  // matching when the ratio changes; the edge re-arms the query at the new ratio and re-bakes.
+  let stopDprWatch: (() => void) | null = null;
+  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+    let mq: MediaQueryList | null = null;
+    const onDprChange = (): void => {
+      armDpr();
+      void bake();
+    };
+    const armDpr = (): void => {
+      if (mq) mq.removeEventListener('change', onDprChange);
+      const dpr = window.devicePixelRatio || 1;
+      mq = window.matchMedia(`(resolution: ${dpr}dppx)`);
+      mq.addEventListener('change', onDprChange);
+    };
+    armDpr();
+    stopDprWatch = () => {
+      if (mq) mq.removeEventListener('change', onDprChange);
+    };
+  }
+
+  onUnmounted(() => {
+    bakeToken++; // orphan any in-flight bake
+    stopOptsWatch();
+    stopDprWatch?.();
+  });
+
+  return {
+    bitmaps: bitmaps as Readonly<Ref<ImageBitmap[] | null>>,
+    ready,
+    pose: pose as Readonly<Ref<number>>,
+    rebake,
+  };
 }
 
 // ── createBoilTicker — imperative ping-pong frame ticker for glyph wiggle ──

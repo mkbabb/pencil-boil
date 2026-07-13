@@ -1,10 +1,18 @@
-# ci — PR + push gate for @mkbabb/pencil-boil (G.W5 Sub-wave C).
+# ci — PR + push gate for @mkbabb/pencil-boil (G.W5 Sub-wave C; browser lane added T4-W1).
 #
 # pencil-boil publishes its TypeScript source directly (main/module/types
 # all point at ./src/index.ts; files: ["src", ...]) — there is no build step.
-# The gate is `npm test`: `check` (tsc --noEmit, the type-soundness contract for
-# the published source) plus the runnable `proof` scripts (boil-guard scheduler
-# invariants, useBoilFrames cache, celestial generators).
+#
+# Two gates:
+#   gates         — `npm test`: `check` (tsc --noEmit, the type-soundness contract for the
+#                   published source) plus the runnable Node `proof` scripts (boil-guard
+#                   scheduler invariants, useBoilFrames cache, celestial/prebake/hold
+#                   generators, raster-serialize's pure half).
+#   browser-proof — `npm run proof:browser`: the identity half Node CANNOT reach (no canvas /
+#                   ImageBitmap / SVG layout). A Playwright lane runs the SHIPPED rasterizePose
+#                   in chromium AND webkit at DPR2 and asserts untainted + repeatMatch +
+#                   distinct-per-pose + capture-vs-live SSIM >= 0.98 (a per-engine tolerance
+#                   floor — WebKit's canvas/compositor filter paths diverge ~1px by design).
 name: ci
 
 on:
@@ -26,3 +34,18 @@ jobs:
             - run: npm ci
             - name: test (check + proofs)
               run: npm test
+
+    browser-proof:
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: "npm"
+            - run: npm ci
+            - name: install playwright browsers
+              run: npx playwright install --with-deps chromium webkit
+            - name: proof:browser (identity — chromium + webkit, DPR2)
+              run: npm run proof:browser

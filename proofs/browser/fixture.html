@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>pencil-boil — raster identity fixture</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
+      /* The live filtered pose is screenshotted by its bounding box; keep it a clean,
+         border-free 240x240 block so the device-pixel capture is exactly cssSize*dpr. */
+      #live-host svg {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="live-host"></div>
+    <script type="module" src="/fixture.js"></script>
+  </body>
+</html>

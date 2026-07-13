@@ -28,15 +28,25 @@ export {
 export {
   type BoilHandle,
   type SequenceHandle,
+  type RasterStackHandle,
   useLineBoil,
-  useBoilFrame,
   useFilterParamBoil,
+  useRasterStack,
   createBoilTicker,
   createSequenceSubscription,
   createStrokeDrawIn,
   usePrefersReducedMotion,
   schedulerDebugInfo,
 } from './vue';
+
+export {
+  type PoseSvgParts,
+  type RasterStackOptions,
+  serializePoseSvg,
+  isSelfContainedSvg,
+  rasterizePose,
+  rasterizePoseStack,
+} from './raster';
 
 export { isBoilHeld, acquireHold, releaseHold, heldFrameCount } from './boilHoldGate';
 

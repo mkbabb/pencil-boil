@@ -1,6 +1,6 @@
 {
   "name": "@mkbabb/pencil-boil",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "Hand-drawn boil utilities for SVG and Vue 3.",
   "type": "module",
   "main": "./src/index.ts",
@@ -18,8 +18,9 @@
   ],
   "scripts": {
     "check": "tsc --noEmit",
-    "proof": "node --import ./proofs/loader.mjs proofs/boil-guard.proof.ts && node --import ./proofs/loader.mjs proofs/frames.proof.ts && node --import ./proofs/loader.mjs proofs/cache.proof.ts && node --import ./proofs/loader.mjs proofs/prebake.proof.ts && node --import ./proofs/loader.mjs proofs/celestial.proof.ts",
-    "test": "npm run check && npm run proof"
+    "proof": "node --import ./proofs/loader.mjs proofs/boil-guard.proof.ts && node --import ./proofs/loader.mjs proofs/frames.proof.ts && node --import ./proofs/loader.mjs proofs/cache.proof.ts && node --import ./proofs/loader.mjs proofs/prebake.proof.ts && node --import ./proofs/loader.mjs proofs/celestial.proof.ts && node --import ./proofs/loader.mjs proofs/raster-serialize.proof.ts && node --import ./proofs/loader.mjs proofs/hold.proof.ts",
+    "test": "npm run check && npm run proof",
+    "proof:browser": "playwright test"
   },
   "keywords": [
     "svg",
@@ -35,6 +36,7 @@
     "vue": "^3.5.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "typescript": "^5.7.0",
     "vue": "^3.5.0"
   }
