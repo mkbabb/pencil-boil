@@ -30,7 +30,7 @@ import {
 | `easings.ts`     | `Easing`, `easeOutCubic`, `easeInCubic`, `easeInOutCubic`, `linear`, `resolveEasing`                                                                                               | Eased tween curves for sequences           |
 | `frames.ts`      | `useBoilCache`, `useBoilFrames`                                                                                                                                                    | LRU memoizer for prebaked boil work (per-value `onEvict` disposal) |
 | `vue.ts`         | `useLineBoil`, `useFilterParamBoil`, `useRasterStack`, `createBoilTicker`, `createSequenceSubscription`, `createStrokeDrawIn`, `usePrefersReducedMotion`, `schedulerDebugInfo`      | The beat-parked scheduler + tween/draw-in/raster |
-| `raster.ts`      | `serializePoseSvg`, `isSelfContainedSvg`, `rasterizePose`, `rasterizePoseStack`                                                                                                    | Bitmap pose cache — bake filtered poses once, swap forever |
+| `raster.ts`      | `serializePoseSvg`, `isSelfContainedSvg`, `rasterizePose`, `rasterizePoseStack`                                                                                                    | Bitmap pose cache: bake filtered poses once, swap forever |
 | `boilHoldGate.ts` | `acquireHold`, `releaseHold`, `isBoilHeld`, `heldFrameCount`                                                                                                                       | Freeze the boil in place (hold-to-peek)    |
 
 ## Animation model
@@ -75,21 +75,21 @@ breathes.
 
 ### Stage 3: frame scheduling
 
-`useLineBoil(frameCount, intervalMs)` is the runtime frame cycler — one beat-aligned
+`useLineBoil(frameCount, intervalMs)` is the runtime frame cycler, one beat-aligned
 tick shared app-wide, asleep between beats:
 
 - accepts numbers, refs, or getters.
 - parks on a `setTimeout` aimed at the next beat boundary, wakes to land the writes
-  inside ONE `requestAnimationFrame`, then sleeps — no continuous rAF poll at rest.
+  inside ONE `requestAnimationFrame`, then sleeps, with no continuous rAF poll at rest.
 - advances by elapsed `intervalMs` measured on the wall clock (`performance.now()`,
   the same clock the beat timer aims with), independent of display refresh.
 - pauses on hidden `document.visibilityState`, resumes on restore.
-- honors `prefers-reduced-motion` reactively — a mid-session flip tears an active
-  subscriber down, not just gates new enrolment.
+- honors `prefers-reduced-motion` reactively: a mid-session flip tears an active
+  subscriber down and gates new enrolment.
 
 A `sequence` subscriber (a draw-in or tween) supersedes the park with a continuous rAF
 chain while it runs; the scheduler falls back to parking on completion. However many
-boil marks and sequences are live, there's at most one pending wake — a beat timer or a
+boil marks and sequences are live, there's at most one pending wake: a beat timer or a
 rAF, never both. The in-repo `boil-guard` proof gates this contract: no rAF at rest,
 exactly one rAF per beat, re-park after every tick, sequence supersede-and-fall-back,
 and any withdrawal (unmount, PRM, hidden tab) disarms both wake shapes.

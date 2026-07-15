@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.2 — 2026-07-13 (tranche-4 WM mobile recut — the residency seam)
+## 0.9.2 — 2026-07-13 (mobile recut: the residency seam)
 
 `useBoilCache` / `useBoilFrames` gain a fourth argument, `onEvict?: (value) => void` — a
 **per-value disposer** bound to a stored value at its first miss and invoked once, with that
@@ -12,16 +12,16 @@ shared LRU mixes types, so a bitmap consumer that evicts a plain frame-array ent
 array's disposer (none), never `close` on a string. Back-compatible: the arg is optional and
 the two-/three-arg calls are unchanged.
 
-`useRasterStack` no longer memoizes its per-pose bitmaps through the shared LRU — it captures
+`useRasterStack` no longer memoizes its per-pose bitmaps through the shared LRU. It captures
 each pose **fresh per bake**. The consumer of a raster stack now owns each bitmap's lifecycle
 (convert it to an object URL for the `<image>`/`<img>` decode, then `close()` the redundant
-bitmap), so the double residency — the decoded `<image>` PLUS the retained `ImageBitmap` of
-the same pixels — dies. A cross-bake memo would have re-handed a consumer-closed bitmap to a
+bitmap), so the double residency dies: the decoded `<image>` PLUS the retained `ImageBitmap`
+of the same pixels. A cross-bake memo would have re-handed a consumer-closed bitmap to a
 warm re-bake (a poisoned re-display); fresh-per-bake is the price of letting the redundant
-copy be freed. A warm theme flip-back re-rasterizes instead of reusing — cheap under the
-Bloom mask and a DPR cap, and it never risks a closed bitmap.
+copy be freed. A warm theme flip-back re-rasterizes instead of reusing, which is cheap under
+the Bloom mask and a DPR cap and never risks a closed bitmap.
 
-## 0.9.1 — 2026-07-13 (tranche-4 W5 currency)
+## 0.9.1 — 2026-07-13 (currency bump)
 
 Currency bump — no library surface change; the dep set catches up and the toolchain
 contract lands in the manifest.
@@ -41,7 +41,7 @@ touches only the type gate, which stays green.
 prose: `node >=24`, `npm >=11` (npm 10 mis-resolves the lockfile), pinned to `npm@11.12.1`.
 A fresh clone on an old npm now trips a gate instead of a silent mis-resolution.
 
-## 0.9.0 — 2026-07-12 (tranche-4 W1 release)
+## 0.9.0 — 2026-07-12 (raster surface)
 
 Bake once, swap forever — the WebKit raster cure, shipped as library surface.
 
@@ -96,15 +96,15 @@ interval`, advanced nothing, and burned a steps=0 retry frame EVERY beat (2 rAF/
 traced live: 16 main frames/s where 8 was the contract). Frame subscribers now elapse on
 `performance.now()` — the clock the timer aims with; sequences keep the rAF timestamp
 (they're animations, frame time is their truth). Traced after: 7.98 main frames/s at an
-8Hz beat — exactly one rAF per beat.
+8Hz beat, exactly one rAF per beat.
 
-## 0.8.0 — 2026-07-11 (tranche-3 W13 §1-P1 release)
+## 0.8.0 — 2026-07-11 (scheduler park)
 
 The scheduler retimed off vsync — the tick is a poll no more; the beat is a clock.
 
 The frame-only steady state no longer spins a perpetual rAF chain (the old shape polled an
 8Hz stop-motion clock at vsync resolution: ~98 empty BeginMainThreadFrame/s on a settled
-page, measured in the T3-W13 audit). It now PARKS: `setTimeout` aimed at the earliest
+page). It now PARKS: `setTimeout` aimed at the earliest
 active frame subscriber's next beat boundary → ONE `requestAnimationFrame` to land the
 writes inside a frame → sleep. Between beats there is no outstanding rAF and no main-thread
 frame scheduling on the scheduler's account. Per-subscriber `lastTick` anchor arithmetic
@@ -123,7 +123,7 @@ reports `chains: 0, parked: true` with a one-frame `chains: 1` blip as each beat
 Proof (g) locks the sleeping steady state: no rAF at rest, exactly one rAF per beat,
 re-park after every tick, sequence supersede-and-fallback, withdrawal disarms both shapes.
 
-## 0.7.0 — 2026-07-10 (tranche-2 W5 release)
+## 0.7.0 — 2026-07-10 (prebake + draw-in surface)
 
 Prebake + draw-in surface, hoisted out of the consumer that hand-rolled it.
 
@@ -154,7 +154,7 @@ proofs since 0.6.0, the doc said only `check`).
 The scheduler is untouched — one rAF chain, the `chains=1` / floor-`subscribers` invariant,
 reactive-PRM teardown, and every existing signature carry forward unchanged.
 
-## 0.6.0 — 2026-07-06 (grand-uplift W12 release train)
+## 0.6.0 — 2026-07-06 (celestial generator proofs)
 
 Celestial generator proofs. `proofs/celestial.proof.ts` locks the point-count, determinism,
 and seed-stability invariants of `wobbleDiamond` (4 vertices), `wobbleStarPolygon` (10), and
@@ -168,7 +168,7 @@ candidate repos standardized their dark-mode chrome elsewhere), so shipping a on
 composable would be speculative surface. The primitives it would compose are all exported and
 now proof-covered; the composable lands when a real second consumer does.
 
-## 0.5.1 — 2026-07-06 (grand-uplift W12 release train)
+## 0.5.1 — 2026-07-06 (frame-set cache)
 
 `useBoilFrames<T>(cacheKeyParts, generateAll, maxEntries?)` — a memoizing frame-set cache.
 Wraps a pure boil-frame generator behind an explicit-key, insertion-order LRU `Map` (default
@@ -177,7 +177,7 @@ non-integer key parts quantize to 4 decimals so float tuples key stably. Framewo
 (no `vue` import) — a pure memoizer any consumer can share, promoting the ad-hoc frame-cache
 discipline hand-rolled in the sudoku consumer's `gridPaths.ts` into the library.
 
-## 0.5.0 — 2026-07-06 (grand-uplift W12 release train)
+## 0.5.0 — 2026-07-06 (unified boil scheduler)
 
 The unified boil scheduler. One rAF chain now drives every boil consumer through a generic
 `advance(steps)` dispatch, and a second subscriber kind—`sequence`—rides the same chain as a
@@ -186,13 +186,13 @@ celebration substrate). `useLineBoil`'s signature and return shape are unchanged
 existing consumer keeps working untouched.
 
 **Reactive prefers-reduced-motion, with correct teardown (M2).** `prefersReducedMotion()` is
-no longer a fresh `matchMedia` read inside `start()` — the scheduler holds a reactive `prmRef`
+no longer a fresh `matchMedia` read inside `start()`; the scheduler holds a reactive `prmRef`
 backed by a `matchMedia` `'change'` listener, surfaced as
 `usePrefersReducedMotion(): Readonly<Ref<boolean>>`. The defect a naive reactive patch misses:
 when PRM flips to `reduce` mid-session, `start()`'s early return guards only *new* enrolment
 and never withdraws an *already-active* subscriber. The `watchEffect` gate now reads
 `prmRef.value` unconditionally and owns the teardown branch, and the central `'change'`
-listener hard-clears every subscriber — reactive or imperative — the instant PRM engages.
+listener hard-clears every subscriber (reactive or imperative) the instant PRM engages.
 
 **Centralized scheduler surface** (all additive): `useBoilFrame` (alias of `useLineBoil`),
 `useFilterParamBoil` (per-tick side effect on the shared chain), `createBoilTicker`
@@ -218,7 +218,7 @@ A single-frame mark (a `draw-on` brush) animates nothing, so it never arms the l
 With zero active subscribers the scheduler disarms and stops re-arming, so a page of only
 static marks costs zero frames. Locked by the in-repo `boil-guard` proof.
 
-## 0.4.0 — 2026-06-10 (tranche-C handmark cohort)
+## 0.4.0 — 2026-06-10 (ellipse primitive)
 
 Adds `ellipsePoints` to `path.ts` — a seeded wobble ellipse returned as a closed
 point ring with a hand-circled overshoot (the sweep runs past 2π so the ring crosses
@@ -228,11 +228,10 @@ its own start). It follows the IR-first convention of `wobbleLinePoints`: it emi
 geometry `@mkbabb/glass-ui`'s new `./handmark` component (positioned circle mode)
 required upstream; no other surface changed. Exported from `src/index.ts`.
 
-## 0.3.0 — 2026-05-28 (G.W5 cohort)
+## 0.3.0 — 2026-05-28 (initial changelog seed)
 
-The current published version, seeded as the initial CHANGELOG entry as part of the
-muster tranche G release-engineering wave (G.W5 sub-wave D). Later entries are written
-by hand at each version bump.
+The first version to carry a hand-written CHANGELOG entry; it was the published baseline
+when this file began. Later entries are written by hand at each version bump.
 
 `@mkbabb/pencil-boil@0.3.0` ships the hand-drawn line + boil geometry toolkit:
 seeded roughen/boil generators, the `perturbPointsClosed` closed-polygon perturbation,
