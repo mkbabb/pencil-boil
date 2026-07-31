@@ -48,6 +48,8 @@ export function installCaptureEnv(dpr = 2): CaptureEnv {
   const g = globalThis as unknown as Record<string, unknown>;
   g.Blob = BlobStub;
   g.Image = ImageStub;
+  // The bake yields a paint boundary before it captures; Node has no rAF, so stand one in.
+  g.requestAnimationFrame = (cb: (t: number) => void) => setTimeout(() => cb(0), 0);
   g.document = {
     createElement(tag: string) {
       // Pushed at creation and mutated by the capture — the handle reads the final box.

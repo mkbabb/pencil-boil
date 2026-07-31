@@ -49,6 +49,7 @@
 
 import {
   computed,
+  nextTick,
   onMounted,
   onUnmounted,
   ref,
@@ -433,8 +434,33 @@ export function useFilterParamBoil(
 //     loads, else the bitmap freezes the fallback glyphs; the first bake awaits it.
 // While a (re-)bake is in flight `bitmaps` is null — the consumer keeps the live-filter
 // fallback mounted (one filtered raster per appearance, the sanctioned transient).
+//
+// Every bake yields one paint boundary (`nextPaint`) before it captures, so a `poseSvg` that
+// resolves its ink off the live cascade reads the change that triggered the bake and not the
+// state it replaced.
 
 const BEAT_MS = 125; // the stop-motion beat useLineBoil defaults to — one clock, app-wide.
+
+/**
+ * One paint boundary: past the current flush cycle, then past a frame.
+ *
+ * `poseSvg` is a consumer callback and it is entitled to read the LIVE CASCADE
+ * (`getComputedStyle(el).color`, a `--custom-property`) — that is how a themed bake gets its
+ * ink. The re-bake that a theme flip triggers therefore must not capture until the flip is
+ * readable. `nextTick` clears the flush that the key change belongs to, including the `post`
+ * watchers a theme library writes its `<html>` class from; the frame clears anything scheduled
+ * on a paint. The `setTimeout` races the rAF so a hidden tab — where rAF is parked — still bakes.
+ */
+function nextPaint(): Promise<void> {
+  return nextTick().then(
+    () =>
+      new Promise<void>((resolve) => {
+        const done = (): void => resolve();
+        if (typeof requestAnimationFrame !== 'undefined') requestAnimationFrame(done);
+        setTimeout(done, 34);
+      }),
+  );
+}
 
 export interface RasterStackHandle {
   /** null until the bake resolves — render the live-filter fallback while null. */
@@ -483,6 +509,12 @@ export function useRasterStack(
     if (!(o.cssSize.width > 0) || !(o.cssSize.height > 0)) return;
     const token = ++bakeToken;
     bitmaps.value = null; // fall back to the live filter while the (re-)bake is in flight
+    // Capture only once the change that TRIGGERED this bake is readable. A theme flip fires
+    // this watch in the same flush that the theme library writes `<html class>` in, and
+    // `poseSvg` resolves its ink off the cascade — capture synchronously and every pose bakes
+    // the OLD theme's ink, then caches under the NEW key, where nothing invalidates it again.
+    await nextPaint();
+    if (token !== bakeToken) return; // superseded while yielding
     const dpr =
       o.dpr ?? (Number.isFinite(window.devicePixelRatio) ? window.devicePixelRatio : 1);
     const captures: Promise<ImageBitmap>[] = [];

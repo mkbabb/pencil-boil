@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.10.1 — 2026-07-31 (the stale-ink patch)
+
+### Fixed
+
+`useRasterStack` yields one paint boundary — `nextTick`, then a frame — before it captures, so
+a `poseSvg` reading the live cascade sees the change that triggered the bake instead of the
+state it replaced. A theme flip does two things in one flush: it flips the consumer's
+`cacheKey`, which fires the reactive-opts watch (a `pre` watcher), and it writes the `<html>`
+class the cascade hangs off, which theme libraries do from a `post` watcher or later. Capturing
+synchronously let the `pre` watcher win: every pose baked the OLD theme's ink and then cached
+under the NEW key, where nothing invalidated it again — one toggle left a near-black wordmark
+on near-black paper (contrast 1.02:1, measured in WebKit and Chromium, blobs demonstrably
+re-minted) and only a reload repaired it. A bake superseded while yielding returns without
+touching the resolved bitmaps; a hidden tab, where rAF is parked, bakes off the raced timeout.
+`proofs/raster-theme-flip.proof.ts` is the gate.
+
 ## 0.10.0 — 2026-07-31 (the capture-intrinsic truth-fix)
 
 ### Fixed

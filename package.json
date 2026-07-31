@@ -1,6 +1,6 @@
 {
   "name": "@mkbabb/pencil-boil",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "Hand-drawn boil utilities for SVG and Vue 3.",
   "type": "module",
   "main": "./src/index.ts",
@@ -18,7 +18,7 @@
   ],
   "scripts": {
     "check": "tsc --noEmit",
-    "proof": "node --import ./proofs/loader.mjs proofs/boil-guard.proof.ts && node --import ./proofs/loader.mjs proofs/frames.proof.ts && node --import ./proofs/loader.mjs proofs/cache.proof.ts && node --import ./proofs/loader.mjs proofs/prebake.proof.ts && node --import ./proofs/loader.mjs proofs/celestial.proof.ts && node --import ./proofs/loader.mjs proofs/raster-serialize.proof.ts && node --import ./proofs/loader.mjs proofs/raster-capture.proof.ts && node --import ./proofs/loader.mjs proofs/vue-raster-stack.proof.ts && node --import ./proofs/loader.mjs proofs/hold.proof.ts",
+    "proof": "node --import ./proofs/loader.mjs proofs/boil-guard.proof.ts && node --import ./proofs/loader.mjs proofs/frames.proof.ts && node --import ./proofs/loader.mjs proofs/cache.proof.ts && node --import ./proofs/loader.mjs proofs/prebake.proof.ts && node --import ./proofs/loader.mjs proofs/celestial.proof.ts && node --import ./proofs/loader.mjs proofs/raster-serialize.proof.ts && node --import ./proofs/loader.mjs proofs/raster-capture.proof.ts && node --import ./proofs/loader.mjs proofs/vue-raster-stack.proof.ts && node --import ./proofs/loader.mjs proofs/raster-theme-flip.proof.ts && node --import ./proofs/loader.mjs proofs/hold.proof.ts",
     "test": "npm run check && npm run proof",
     "proof:browser": "playwright test"
   },
