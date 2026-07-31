@@ -475,9 +475,14 @@ export function useRasterStack(
 
   async function bake(): Promise<void> {
     if (typeof document === 'undefined') return; // SSR / off-DOM — nothing to capture
+    const o = toValue(opts);
+    // A non-positive box means "not measured yet", not "capture a 1×1" (an <svg> has no
+    // offsetWidth, so an element-size seed reads 0 before layout). Return BEFORE the token
+    // bump: no in-flight bake is orphaned and no resolved bitmaps are nulled; the reactive
+    // opts watch re-bakes the instant the box lands.
+    if (!(o.cssSize.width > 0) || !(o.cssSize.height > 0)) return;
     const token = ++bakeToken;
     bitmaps.value = null; // fall back to the live filter while the (re-)bake is in flight
-    const o = toValue(opts);
     const dpr =
       o.dpr ?? (Number.isFinite(window.devicePixelRatio) ? window.devicePixelRatio : 1);
     const captures: Promise<ImageBitmap>[] = [];

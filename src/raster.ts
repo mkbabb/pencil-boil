@@ -23,7 +23,11 @@
 
 /** Structured parts of one frozen pose, assembled into a self-contained SVG document. */
 export interface PoseSvgParts {
-  /** CSS px width of the render box — the SVG's intrinsic width; capture scales by dpr. */
+  /**
+   * CSS px width of the render box — it frames the default `viewBox` (the pose's user
+   * space). NOT the captured document's intrinsic: `rasterizePose` rewrites that to the
+   * capture size (`cssSize * dpr`) before the blob.
+   */
   width: number;
   /** CSS px height of the render box. */
   height: number;
@@ -48,6 +52,8 @@ export interface PoseSvgParts {
  * (a fixed `PoseSvgParts` always serializes byte-identically), so it pairs with
  * `useBoilCache` and the Node serialize proof. Does NOT resolve colors — that is the
  * caller's `getComputedStyle` step; this only frames the parts into a blob-ready document.
+ * The `width`/`height` written here are the caller's CSS box; `rasterizePose` rewrites them
+ * to the capture size in device px before the blob (`viewBox` untouched).
  */
 export function serializePoseSvg(parts: PoseSvgParts): string {
   const viewBox = parts.viewBox ?? `0 0 ${parts.width} ${parts.height}`;
@@ -110,6 +116,30 @@ function loadSvgImage(url: string): Promise<HTMLImageElement> {
 }
 
 /**
+ * Rewrite the pose document's root `width`/`height` to the capture size in device px.
+ * WebKit rasterizes a filtered SVG-as-image at its DECLARED intrinsic and bilinearly
+ * upscales into the `drawImage` dest, so a user-space intrinsic pins the bake at user-space
+ * resolution (measured: softRatio flat across dpr2→dpr3). `viewBox` is untouched — user
+ * space is preserved, only render resolution moves. Throws on a root with no `viewBox`:
+ * there the intrinsic IS the user space, so rewriting it would rescale the pose (the
+ * `isSelfContainedSvg` discipline — fail at bake time, never bake silently wrong).
+ */
+function stampCaptureIntrinsic(svg: string, w: number, h: number): string {
+  const end = svg.indexOf('>') + 1;
+  const root = svg.slice(0, end);
+  if (!/\sviewBox="/.test(root)) {
+    throw new Error(
+      'rasterizePose: pose SVG root has no viewBox — the capture intrinsic cannot be ' +
+        'stamped without rescaling the pose; serialize with a viewBox',
+    );
+  }
+  const stamped = root
+    .replace(/\s(?:width|height)="[^"]*"/g, '')
+    .replace('<svg', `<svg width="${w}" height="${h}"`);
+  return stamped + svg.slice(end);
+}
+
+/**
  * Capture ONE self-contained pose SVG to an `ImageBitmap` at device DPR via same-origin
  * SVG→`Blob`→`drawImage`. The bitmap is the filter's own raster, captured — not a
  * re-derivation. Untainted (proven in WebKit at DPR2: a same-origin serialized blob draws
@@ -127,12 +157,15 @@ export async function rasterizePose(
         'resolve colors to literals and inline <defs> before capture',
     );
   }
-  const blob = new Blob([poseSvg], { type: 'image/svg+xml;charset=utf-8' });
+  const deviceW = Math.max(1, Math.round(cssSize.width * dpr));
+  const deviceH = Math.max(1, Math.round(cssSize.height * dpr));
+  // The document declares the box it is captured INTO — WebKit rasters a filtered
+  // SVG-as-image at its declared intrinsic and upscales from there.
+  const captureSvg = stampCaptureIntrinsic(poseSvg, deviceW, deviceH);
+  const blob = new Blob([captureSvg], { type: 'image/svg+xml;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   try {
     const img = await loadSvgImage(url);
-    const deviceW = Math.max(1, Math.round(cssSize.width * dpr));
-    const deviceH = Math.max(1, Math.round(cssSize.height * dpr));
     const canvas = document.createElement('canvas');
     canvas.width = deviceW;
     canvas.height = deviceH;
