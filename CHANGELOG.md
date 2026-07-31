@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.10.0 — 2026-07-31 (the capture-intrinsic truth-fix)
+
+### Fixed
+
+`rasterizePose` stamps the capture size (`round(cssSize × dpr)`) as the pose document's
+intrinsic `width`/`height` between serialize and blob. WebKit pins a filtered SVG-as-image
+raster at its *declared* intrinsic and bilinearly upscales into the `drawImage` dest —
+measured 2.08–3.12× soft on a 200-unit celestial pose, 3.73–5.60× on a text logo, flat
+across dpr2→dpr3 (extra dpr bought zero detail). The `viewBox` is untouched: user space is
+preserved; only render resolution moves. A pose root without a `viewBox` now throws a named
+error instead of baking silently wrong. Minor bump: every caller's bitmaps change — they
+sharpen, with zero call-site diff.
+
+`useRasterStack` no longer captures at a non-positive `cssSize`; the bake defers until the
+reactive box lands. An `<svg>` host has no `offsetWidth`, so a size seeded from
+`useElementSize` starts at 0 — 0.9.2 baked a fallback-sized stack first and re-baked after,
+shipping one wrong-resolution paint.
+
 ## 0.9.2 — 2026-07-13 (mobile recut: the residency seam)
 
 `useBoilCache` / `useBoilFrames` gain a fourth argument, `onEvict?: (value) => void` — a
