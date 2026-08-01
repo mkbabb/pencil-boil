@@ -4,6 +4,12 @@
 # TypeScript source directly (no build step); the published tarball is the
 # src/ tree per the package.json `files` field.
 #
+# IDEMPOTENT BY DESIGN: the tag is the record of a release, and a tag may land after the
+# version is already on the registry — a publish from the workstation, a re-pushed tag, a
+# historical version tagged late. Publishing over a published version is a hard 403, so the
+# job asks the registry first and skips when the version is already there. A red release run
+# has to mean something went wrong; "this version already exists" is not that.
+#
 # Publish auth: NPM_TOKEN repository secret. Runs only on tag refs.
 name: release
 
@@ -24,7 +30,18 @@ jobs:
             - run: npm ci
             - name: check (tsc --noEmit)
               run: npm run check
+            - name: already on the registry?
+              id: published
+              run: |
+                  version=$(node -p "require('./package.json').version")
+                  if npm view "@mkbabb/pencil-boil@$version" version >/dev/null 2>&1; then
+                      echo "exists=true" >> "$GITHUB_OUTPUT"
+                      echo "@mkbabb/pencil-boil@$version is already published — skipping."
+                  else
+                      echo "exists=false" >> "$GITHUB_OUTPUT"
+                  fi
             - name: publish
+              if: steps.published.outputs.exists == 'false'
               run: npm publish --access public
               env:
                   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
