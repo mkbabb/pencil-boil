@@ -1,5 +1,5 @@
 /**
- * raster-capture.proof — G2.1: `rasterizePose` stamps the CAPTURE intrinsic on the blob
+ * raster-capture.proof — G2.1: the capture stamps the CAPTURE intrinsic on the blob
  * document.
  *
  *   node --import ./proofs/loader.mjs proofs/raster-capture.proof.ts
@@ -9,7 +9,7 @@
  * vectorially). A pose serialized at the caller's user-space box therefore bakes at
  * user-space resolution however large the canvas is — measured signature: softRatio FLAT
  * across dpr2→dpr3 (0.3734→0.3739 logo, 0.1259→0.1261 toggle; T4-P1 mark 4 M1), i.e. extra
- * dpr buys zero detail. `raster.ts`'s own stated contract is that the bitmap is captured at
+ * dpr buys zero detail. `raster.ts`'s own stated contract is that the pose is captured at
  * `cssSize * dpr` device px, so the document must DECLARE that size. viewBox is untouched —
  * user space is preserved, only the render resolution moves.
  *
@@ -23,7 +23,7 @@
  *       one truth — `raster.ts`'s documented capture box).
  *   (e) BODY UNTOUCHED: everything after the root tag (inlined <defs> included) is
  *       byte-identical to the serialized input.
- *   (f) GUARD: a root without a viewBox throws a named `rasterizePose:` error and creates NO
+ *   (f) GUARD: a root without a viewBox throws a named `rasterizePoseToBlob:` error and creates NO
  *       blob — an intrinsic rewrite on a document whose user space is implied BY that
  *       intrinsic would rescale the pose. Fail at bake time, never bake silently wrong (the
  *       `isSelfContainedSvg` discipline).
@@ -31,7 +31,7 @@
  *       rejects on the cascade error, not the viewBox one.
  */
 
-import { rasterizePose, serializePoseSvg, type PoseSvgParts } from '../src/raster.ts';
+import { rasterizePoseToBlob, serializePoseSvg, type PoseSvgParts } from '../src/raster.ts';
 import { installCaptureEnv, rootTag, attr } from './capture-env.ts';
 
 const env = installCaptureEnv(2);
@@ -67,7 +67,7 @@ function gridPoseParts(pose: number, box: { width: number; height: number }): Po
 {
   env.reset();
   const pose = serializePoseSvg(gridPoseParts(0, { width: 200, height: 80 }));
-  await rasterizePose(pose, { width: 300, height: 120 }, 2);
+  await rasterizePoseToBlob(pose, { width: 300, height: 120 }, 2);
 
   assert(env.blobs.length === 1, '(a) one capture => one blob document');
   const tag = rootTag(env.blobs[0]);
@@ -93,7 +93,7 @@ function gridPoseParts(pose: number, box: { width: number; height: number }): Po
 {
   env.reset();
   const pose = serializePoseSvg(gridPoseParts(1, { width: 200, height: 200 }));
-  await rasterizePose(pose, { width: 33.3, height: 17.7 }, 3);
+  await rasterizePoseToBlob(pose, { width: 33.3, height: 17.7 }, 3);
   const tag = rootTag(env.blobs[0]);
   assert(attr(tag, 'width') === '100', '(b) round(33.3 × 3) = 100 stamped (no fractional intrinsic)');
   assert(attr(tag, 'height') === '53', '(b) round(17.7 × 3) = 53 stamped');
@@ -108,7 +108,7 @@ function gridPoseParts(pose: number, box: { width: number; height: number }): Po
 {
   env.reset();
   const pose = serializePoseSvg(gridPoseParts(2, { width: 120, height: 60 }));
-  await rasterizePose(pose, { width: 120, height: 60 });
+  await rasterizePoseToBlob(pose, { width: 120, height: 60 });
   const tag = rootTag(env.blobs[0]);
   assert(
     attr(tag, 'width') === '240' && attr(tag, 'height') === '120',
@@ -125,11 +125,14 @@ function gridPoseParts(pose: number, box: { width: number; height: number }): Po
     `</svg>`;
   let message = '';
   try {
-    await rasterizePose(noViewBox, { width: 300, height: 120 }, 2);
+    await rasterizePoseToBlob(noViewBox, { width: 300, height: 120 }, 2);
   } catch (e) {
     message = (e as Error).message;
   }
-  assert(message.startsWith('rasterizePose:'), '(f) a viewBox-less root throws a named rasterizePose error');
+  assert(
+    message.startsWith('rasterizePoseToBlob:'),
+    '(f) a viewBox-less root throws a named rasterizePoseToBlob error',
+  );
   assert(message.includes('viewBox'), '(f) the error names the missing viewBox');
   assert(env.blobs.length === 0, '(f) nothing was baked — the throw precedes blob creation');
 }
@@ -144,7 +147,7 @@ function gridPoseParts(pose: number, box: { width: number; height: number }): Po
   });
   let message = '';
   try {
-    await rasterizePose(leak, { width: 10, height: 10 }, 2);
+    await rasterizePoseToBlob(leak, { width: 10, height: 10 }, 2);
   } catch (e) {
     message = (e as Error).message;
   }

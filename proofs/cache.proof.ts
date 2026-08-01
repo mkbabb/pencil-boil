@@ -6,19 +6,20 @@
  * Proofs:
  *   (a) a repeated key returns the SAME cached value (compute runs once) — for a scalar T,
  *       not just an array.
- *   (b) useBoilFrames rides the SAME underlying LRU as useBoilCache (one cap governs both).
+ *   (b) a frame ARRAY rides the same LRU as a scalar — one cache, one cap, whatever the
+ *       cached shape (the 0.11 surface, after the `useBoilFrames` alias was retired).
  *   (c) LRU eviction by insertion order with a small explicit cap.
  *   (d) onEvict (0.9.2): the disposer fires with the EVICTED value, exactly once, on LRU
- *       eviction — the ImageBitmap `close()` seam that ends the raster residency accretion.
+ *       eviction — the disposal seam for a cached native resource (an object URL, a bitmap).
  *   (e) onEvict is per-VALUE, not per-call: an entry with no disposer evicts silently even
- *       when the evicting call carries one (the mixed-type LRU guard — a bitmap consumer must
- *       never run its `close` on a plain frame-array entry it happens to evict).
+ *       when the evicting call carries one (the mixed-type LRU guard — a resource consumer
+ *       must never run its disposer on a plain frame-array entry it happens to evict).
  *
  * The module-level cache is process-fresh here (own node process), so insertion order is
  * fully controlled.
  */
 
-import { useBoilCache, useBoilFrames } from '../src/frames.ts';
+import { useBoilCache } from '../src/frames.ts';
 
 let passed = 0;
 const failures: string[] = [];
@@ -48,23 +49,21 @@ function assert(cond: boolean, label: string): void {
   assert(calls === 1, '(a) a cache hit does not re-run compute');
 }
 
-// (b) shared LRU — a value stored via useBoilCache is retrievable via useBoilFrames when the
-// key + shape line up (frames delegate to the same Map), and vice-versa the caches do not
-// double-count.
+// (b) one cache, whatever the shape — a frame array is memoized by the same Map that holds a
+// scalar, so one cap governs all boil memoization.
 {
   let frameCalls = 0;
   const key = ['shared', 3];
-  const a = useBoilFrames(key, () => {
+  const a = useBoilCache(key, () => {
     frameCalls += 1;
     return ['f0', 'f1'];
   });
-  // useBoilCache with the SAME key hits the entry useBoilFrames just wrote — one Map.
   const b = useBoilCache<string[]>(key, () => {
     frameCalls += 1;
     return ['x'];
   });
-  assert(a === b, '(b) useBoilCache and useBoilFrames share one underlying entry per key');
-  assert(frameCalls === 1, '(b) the shared entry was computed once across both APIs');
+  assert(a === b, '(b) a frame array is cached in the SAME entry a scalar would occupy');
+  assert(frameCalls === 1, '(b) the entry was computed once — one Map, one cap');
 }
 
 // (c) LRU eviction with an explicit small cap.
@@ -86,7 +85,7 @@ function assert(cond: boolean, label: string): void {
   assert(calls === before + 2, '(c) the untouched oldest entry was evicted');
 }
 
-// (d)/(e) onEvict — the 0.9.2 disposal seam (the ImageBitmap close() that ends raster
+// (d)/(e) onEvict — the 0.9.2 disposal seam (the native-resource release that ends
 // residency accretion). Runs after (c), which deterministically leaves the cache holding
 // exactly two disposer-less entries ({'P','Q'}), so the eviction order below is controlled.
 {

@@ -1,31 +1,41 @@
 /**
- * Bitmap pose cache — capture each frozen filtered pose to an `ImageBitmap` ONCE, then
- * swap bitmaps forever. Browser-only, framework-agnostic (no `vue` import; mirrors
- * `path.ts`'s discipline — pure serialization helpers + one DOM capture entry).
+ * Baked pose cache — capture each frozen filtered pose to a PNG `Blob` ONCE, then swap the
+ * images forever. Browser-only, framework-agnostic (no `vue` import; mirrors `path.ts`'s
+ * discipline — pure serialization helpers + one DOM capture entry).
  *
  * WHY: WebKit does not cache a filtered-SVG raster across an opacity flip — a resident
  * `feTurbulence + feDisplacementMap` layer re-executes the whole filter chain in the GPU
  * process on every beat, a ~150–224 ms board-area raster on the critical frame path
  * (~2 cores at idle, single-digit fps). The cure is to rasterize each frozen pose to a
- * bitmap at mount and opacity-swap the bitmaps on the beat — no filter ever re-executes at
- * steady state, in either engine. This module is the capture; `useRasterStack` (`vue.ts`)
- * drives the pose off the shared beat and memoizes each bitmap through `useBoilCache`.
+ * bitmap at mount and opacity-swap the baked images on the beat — no filter ever re-executes
+ * at steady state, in either engine. This module is the capture; `useRasterStack` (`vue.ts`)
+ * drives the pose off the shared beat and owns the object-URL lifetime.
+ *
+ * THE ARTIFACT IS THE BLOB (0.11.0). A pose's durable render artifact is an object URL that
+ * an `<image>` / `<img>` decodes, so the capture hands back the encoded `Blob` and nothing
+ * else. The 0.10.x shape handed back an `ImageBitmap`, which every consumer then re-drew
+ * into a SECOND surface and PNG-encoded to reach that same URL: a full copy
+ * (`createImageBitmap`, 79–195 ms) plus a redundant encode (`convertToBlob`, 87–112 ms) per
+ * pose — ≈98% of a measured ~280 ms WebKit re-bake stall. `rasterizePoseToBlob` encodes the
+ * capture canvas itself, so no pixel passes through a second surface: the raster is
+ * identical BY CONSTRUCTION, proved byte for byte per engine in
+ * `proofs/browser/blob-identity.spec.ts`.
  *
  * THE SELF-CONTAINED CONTRACT (load-bearing): the captured SVG is serialized to a detached
  * `Blob` URL and drawn to a canvas. A detached blob document CANNOT reach the page's
  * `<defs>`, and a `currentColor` / `var()` reference has no cascade to resolve against —
- * either would freeze the wrong (fallback / light-theme) pixels into the bitmap. So the
- * pose SVG MUST inline its filter `<defs>` and resolve every color to a literal before
- * capture. `serializePoseSvg` builds a compliant document; `isSelfContainedSvg` is the
- * guard, and `rasterizePose` throws on a leak rather than baking a silent-wrong bitmap
- * (the dropped-def class the browser identity gate reds — caught here at bake time).
+ * either would freeze the wrong (fallback / light-theme) pixels into the bake. So the pose
+ * SVG MUST inline its filter `<defs>` and resolve every color to a literal before capture.
+ * `serializePoseSvg` builds a compliant document; `isSelfContainedSvg` is the guard, and
+ * `rasterizePoseToBlob` throws on a leak rather than baking a silent-wrong image (the
+ * dropped-def class the browser identity gate reds — caught here at bake time).
  */
 
 /** Structured parts of one frozen pose, assembled into a self-contained SVG document. */
 export interface PoseSvgParts {
   /**
    * CSS px width of the render box — it frames the default `viewBox` (the pose's user
-   * space). NOT the captured document's intrinsic: `rasterizePose` rewrites that to the
+   * space). NOT the captured document's intrinsic: the capture rewrites that to the
    * capture size (`cssSize * dpr`) before the blob.
    */
   width: number;
@@ -52,8 +62,8 @@ export interface PoseSvgParts {
  * (a fixed `PoseSvgParts` always serializes byte-identically), so it pairs with
  * `useBoilCache` and the Node serialize proof. Does NOT resolve colors — that is the
  * caller's `getComputedStyle` step; this only frames the parts into a blob-ready document.
- * The `width`/`height` written here are the caller's CSS box; `rasterizePose` rewrites them
- * to the capture size in device px before the blob (`viewBox` untouched).
+ * The `width`/`height` written here are the caller's CSS box; the capture rewrites them to
+ * the capture size in device px before the blob (`viewBox` untouched).
  */
 export function serializePoseSvg(parts: PoseSvgParts): string {
   const viewBox = parts.viewBox ?? `0 0 ${parts.width} ${parts.height}`;
@@ -92,7 +102,7 @@ export interface RasterStackOptions {
    * fonts assumed loaded. A detached blob cannot reach the page `<defs>`.
    */
   poseSvg: (pose: number) => string;
-  /** CSS px the stack renders at; the bitmap is captured at `cssSize * dpr` device px. */
+  /** CSS px the stack renders at; each pose is captured at `cssSize * dpr` device px. */
   cssSize: { width: number; height: number };
   /** Capture ratio (default `devicePixelRatio`). */
   dpr?: number;
@@ -110,7 +120,7 @@ function loadSvgImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('rasterizePose: SVG blob failed to load'));
+    img.onerror = () => reject(new Error('rasterizePoseToBlob: SVG blob failed to load'));
     img.src = url;
   });
 }
@@ -129,7 +139,7 @@ function stampCaptureIntrinsic(svg: string, w: number, h: number): string {
   const root = svg.slice(0, end);
   if (!/\sviewBox="/.test(root)) {
     throw new Error(
-      'rasterizePose: pose SVG root has no viewBox — the capture intrinsic cannot be ' +
+      'rasterizePoseToBlob: pose SVG root has no viewBox — the capture intrinsic cannot be ' +
         'stamped without rescaling the pose; serialize with a viewBox',
     );
   }
@@ -140,20 +150,19 @@ function stampCaptureIntrinsic(svg: string, w: number, h: number): string {
 }
 
 /**
- * Capture ONE self-contained pose SVG to an `ImageBitmap` at device DPR via same-origin
- * SVG→`Blob`→`drawImage`. The bitmap is the filter's own raster, captured — not a
- * re-derivation. Untainted (proven in WebKit at DPR2: a same-origin serialized blob draws
- * to a CORS-clean canvas). Throws if the SVG is not self-contained (a `currentColor` /
- * `var()` leak) — capturing it would freeze a fallback color into the bitmap.
+ * Draw ONE self-contained pose SVG onto a canvas at device DPR via same-origin
+ * SVG→`Blob`→`drawImage`. The canvas holds the filter's own raster, captured — not a
+ * re-derivation — and it is the ONLY surface the pose ever touches. Untainted (proven in
+ * WebKit at DPR2: a same-origin serialized blob draws to a CORS-clean canvas).
  */
-export async function rasterizePose(
+async function capturePoseCanvas(
   poseSvg: string,
   cssSize: { width: number; height: number },
-  dpr: number = currentDpr(),
-): Promise<ImageBitmap> {
+  dpr: number,
+): Promise<HTMLCanvasElement> {
   if (!isSelfContainedSvg(poseSvg)) {
     throw new Error(
-      'rasterizePose: pose SVG is not self-contained (currentColor/var() leaked) — ' +
+      'rasterizePoseToBlob: pose SVG is not self-contained (currentColor/var() leaked) — ' +
         'resolve colors to literals and inline <defs> before capture',
     );
   }
@@ -170,25 +179,52 @@ export async function rasterizePose(
     canvas.width = deviceW;
     canvas.height = deviceH;
     const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('rasterizePose: 2D canvas context unavailable');
+    if (!ctx) throw new Error('rasterizePoseToBlob: 2D canvas context unavailable');
     ctx.drawImage(img, 0, 0, deviceW, deviceH);
-    return await createImageBitmap(canvas);
+    return canvas;
   } finally {
     URL.revokeObjectURL(url);
   }
 }
 
+/** Promise-shaped `canvas.toBlob` — a null encode is an error, never an empty artifact. */
+function encodeCanvas(
+  canvas: HTMLCanvasElement,
+  type: string,
+  quality?: number,
+): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) =>
+        blob
+          ? resolve(blob)
+          : reject(new Error(`rasterizePoseToBlob: the encoder returned null for ${type}`)),
+      type,
+      quality,
+    );
+  });
+}
+
 /**
- * Rasterize every pose to an `ImageBitmap` (framework-agnostic — the entry a non-Vue
- * consumer calls; `useRasterStack` drives this per-pose through `useBoilCache`). Each pose
- * is captured at `cssSize * dpr` device px; the returned array is pose-indexed. Rejects if
- * any pose SVG leaks a cascade reference (`rasterizePose`'s self-contained guard).
+ * Capture ONE self-contained pose SVG to an encoded image `Blob` at device DPR — the pose's
+ * durable render artifact, ready for `URL.createObjectURL`.
+ *
+ * The encode reads the capture canvas directly: no `ImageBitmap` copy, no second surface, no
+ * re-draw. That is what makes the output identical to the retired
+ * capture→bitmap→re-draw→encode round trip BY CONSTRUCTION rather than by tolerance — there
+ * is nowhere for a pixel to change (`proofs/browser/blob-identity.spec.ts` compares the two
+ * byte for byte, per engine, and `proofs/raster-blob.proof.ts` proves the single surface).
+ *
+ * Throws if the SVG is not self-contained (a `currentColor` / `var()` leak) — capturing it
+ * would freeze a fallback color into the bake — or if its root carries no `viewBox` (the
+ * capture intrinsic could not be stamped without rescaling the pose).
  */
-export function rasterizePoseStack(opts: RasterStackOptions): Promise<ImageBitmap[]> {
-  const dpr = opts.dpr ?? currentDpr();
-  const captures: Promise<ImageBitmap>[] = [];
-  for (let pose = 0; pose < opts.poseCount; pose++) {
-    captures.push(rasterizePose(opts.poseSvg(pose), opts.cssSize, dpr));
-  }
-  return Promise.all(captures);
+export async function rasterizePoseToBlob(
+  poseSvg: string,
+  cssSize: { width: number; height: number },
+  dpr: number = currentDpr(),
+  type: string = 'image/png',
+  quality?: number,
+): Promise<Blob> {
+  return encodeCanvas(await capturePoseCanvas(poseSvg, cssSize, dpr), type, quality);
 }

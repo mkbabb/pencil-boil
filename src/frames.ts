@@ -1,5 +1,5 @@
 /**
- * useBoilCache / useBoilFrames — a memoizing value cache for boil work.
+ * useBoilCache — a memoizing value cache for boil work.
  *
  * Boil-frame generators (grid lines, divider strokes) and other prebake work are pure
  * functions of a parameter tuple, but recomputing the result on every board/config change is
@@ -7,19 +7,16 @@
  * explicit-key, insertion-order LRU `Map` (default cap 24) — the generator runs only on a
  * cache miss.
  *
- * `useBoilCache<T>` is the general primitive: it caches ONE computed `T` (a frame array, a
- * serialized path, a points ring — anything pure of its key). `useBoilFrames<T>` is the
- * historical frame-array shape, now a thin `useBoilCache<T[]>` wrapper kept for the consumers
- * that import it by name; both share the SAME underlying LRU so one cap governs all boil
- * memoization.
+ * It caches ONE computed `T` per key — a frame array, a serialized path, a points ring,
+ * anything pure of its key — through ONE LRU, so a single cap governs all boil memoization.
  *
  * DISPOSAL (0.9.2): a cached value may own a native resource the GC cannot reclaim — an
- * `ImageBitmap` (its decoded pixels live off-heap), an object URL, a WebGL handle. Such a
- * value passes an `onEvict` disposer at its first miss; the disposer is bound to THAT key's
- * value and fires exactly once, when the value leaves the cache by LRU eviction. Binding the
- * disposer per-value (not per-call) is load-bearing: the shared LRU mixes types — a raster
- * `ImageBitmap` and a plain frame-string array coexist — so a bitmap consumer's eviction of
- * an array entry must run the ARRAY's disposer (none), never the bitmap consumer's `close`.
+ * object URL, an `ImageBitmap`, a WebGL handle. Such a value passes an `onEvict` disposer at
+ * its first miss; the disposer is bound to THAT key's value and fires exactly once, when the
+ * value leaves the cache by LRU eviction. Binding the disposer per-value (not per-call) is
+ * load-bearing: one LRU holds every shape at once — a resource handle and a plain
+ * frame-string array coexist — so one consumer's eviction of an array entry must run the
+ * ARRAY's disposer (none), never the other consumer's `revoke`/`close`.
  *
  * Framework-agnostic by design: no `vue` import, no reactivity, no lifecycle. It is a pure
  * memoizer — the `use`-prefix is kept for continuity with the boil vocabulary, not because it
@@ -81,19 +78,4 @@ export function useBoilCache<T>(
   if (onEvict) BOIL_DISPOSERS.set(key, onEvict as (value: unknown) => void);
   if (BOIL_CACHE.size > maxEntries) evictOldest();
   return value;
-}
-
-/**
- * Frame-array specialization of {@link useBoilCache}: `generateAll` must return exactly the
- * frames to cache as one array. Delegates to the shared LRU, so `useBoilCache` and
- * `useBoilFrames` never fight over two separate caps. `onEvict` forwards through for the rare
- * frame value that owns a resource (usually none — arrays are GC-reclaimed).
- */
-export function useBoilFrames<T>(
-  cacheKeyParts: (string | number)[],
-  generateAll: () => T[],
-  maxEntries: number = DEFAULT_MAX_ENTRIES,
-  onEvict?: (value: T[]) => void,
-): T[] {
-  return useBoilCache<T[]>(cacheKeyParts, generateAll, maxEntries, onEvict);
 }

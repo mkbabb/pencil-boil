@@ -3,7 +3,7 @@
  *
  *   node --import ./proofs/loader.mjs proofs/raster-serialize.proof.ts
  *
- * `rasterizePoseStack`'s identity invariant (untainted capture, byte-deterministic pixel
+ * the stack capture's identity invariant (untainted capture, byte-deterministic pixel
  * hash, distinct-per-pose) is a BROWSER property — no canvas / ImageBitmap / SVG layout in
  * Node — so it lives in the separate Playwright `proof:browser` lane. The PURE half CAN be
  * proven here: the `poseSvg(i)` serializer and its self-contained guard. This closes the
@@ -39,7 +39,7 @@ function assert(cond: boolean, label: string): void {
 // A realistic per-pose serializer: a frozen wobble filter def inlined, colors resolved to
 // hex literals, parametrized by pose (a distinct turbulence seed/frequency per pose — the
 // `wobblePoseFrequencies` shape). This is the compliant `poseSvg(i)` a consumer hands
-// `rasterizePoseStack`; the proof exercises the discipline, not the app's exact strings.
+// `useRasterStack`; the proof exercises the discipline, not the app's exact strings.
 const POSE_FREQ = [0.012, 0.018, 0.015, 0.021];
 function gridPoseParts(pose: number): PoseSvgParts {
   const freq = POSE_FREQ[pose];

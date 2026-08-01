@@ -1,5 +1,79 @@
 # Changelog
 
+## 0.11.0 — 2026-08-01 (the artifact is the blob)
+
+### Changed
+
+**`rasterizePoseToBlob` replaces `rasterizePose`, and `useRasterStack` hands back `urls`
+instead of `bitmaps`.** What a baked surface renders is an `<image>` decoding an object URL —
+that decode is the single resident raster. Handing back an `ImageBitmap` made every consumer
+walk three more steps to reach the same URL: re-draw the bitmap into a second surface,
+PNG-encode that, close the redundant copy. Measured on a board-sized pose, those steps cost
+79–195 ms (`createImageBitmap`) plus 87–112 ms (`convertToBlob`) per pose — ≈98% of a ~280 ms
+WebKit re-bake stall. The capture now encodes its own canvas, so the copy and the redundant
+encode are simply gone, and the composable mints and revokes the URLs itself: the outgoing set
+is released only once its successor lands, a superseded bake releases what it minted, and
+unmount releases the rest.
+
+No pixel moves, and not by tolerance — by construction. One internal capture draws the pose
+and the encode reads THAT canvas; there's no second surface for a pixel to change on.
+`proofs/browser/blob-identity.spec.ts` proves it against the retired round trip in both
+engines at DPR2: 0 of 921,600 bytes differ per pose, maxΔ 0, and the PNG bytes themselves come
+out identical. `proofs/raster-blob.proof.ts` proves the construction — one canvas, one encode,
+zero `createImageBitmap` calls.
+
+Migration: read `urls` where you read `bitmaps`, and delete the bitmap→URL helper. Don't
+revoke what the composable hands you; it owns those handles.
+
+**`stop()` cannot throw.** Every handle this package returns — `BoilHandle`,
+`SequenceHandle`, the inert one PRM hands back — now guarantees `stop()` returns in every
+lifecycle phase: before start, mid-flight, from inside its own tick, after completion, twice,
+after a central PRM clear, after teardown. The withdrawal is ordered so the guarantee costs
+nothing in truth: the two statements that must land are total by construction and run first;
+only the host-facing teardown (`cancelAnimationFrame` / `clearTimeout`, both patchable by an
+embedding page) is guarded, and by then the subscriber is already out of the set.
+`proofs/stop-contract.proof.ts` asserts the no-throw arms under a hostile host AND the
+negative control they'd otherwise hide — the withdrawal still lands, and a stopped mark never
+advances again. Callers can drop their `try { h.stop() } catch {}` wrappers; those wrappers
+were unfalsifiable by inspection, which is why the guarantee belongs in here.
+
+### Removed — the unconsumed-export adjudication
+
+The public surface went 44 → 41. Twenty exports had no importer anywhere; each was ruled
+individually, and 0.x semver permits the cuts. Pruned when nothing consumes it AND it's a
+redundant specialization or a superseded output; kept when something does consume it, when
+it's the readable half of a consumed pair, when it's the declared type of a kept value, or
+when it's a primary primitive of the package's own vocabulary — those keeps are recorded with
+the consumer they're for.
+
+| Export | Ruling | Basis |
+| --- | --- | --- |
+| `rasterizePose` | **PRUNED** | Superseded — the bitmap was a copy taken on the way to the blob |
+| `rasterizePoseStack` | **PRUNED** | Superseded; `useRasterStack` owns the per-pose loop |
+| `useFilterParamBoil` | **PRUNED** | Retired by design downstream (the per-beat `baseFrequency` write is dead); `createBoilTicker` covers an imperative per-tick effect |
+| `useBoilFrames` | **PRUNED** | An alias of `useBoilCache` kept "for the consumers that import it by name" — there were none |
+| `createStrokeDrawIn` | KEPT | Consumer: a glyph/grid draw-in replacing a hand-rolled dashoffset tween |
+| `boilRectFrames` | KEPT | Consumer: a prebaked boiling rect frame (the local twin it replaces) |
+| `ellipsePoints` | KEPT | Consumer: a hand-circled ring, boiled through `perturbPointsClosed` |
+| `isSelfContainedSvg` | KEPT | Consumed by `proofs/browser/fixture.js`; the guard a pose builder runs before capture |
+| `useLineBoil` | KEPT | Primary primitive, and the engine `useRasterStack` drives its pose off |
+| `isBoilHeld` | KEPT | The readable half of `acquireHold`/`releaseHold`, both consumed |
+| `perturbPointsClosed` | KEPT | The closed-ring twin of the consumed `perturbPoints`; `ellipsePoints` boils through it |
+| `catmullRomToBezier` | KEPT | The path family's second serializer (smooth), beside the consumed `pointsToLinear` |
+| `wobbleLine` | KEPT | The string form of the consumed `wobbleLinePoints`; `wobbleRect` composes it |
+| `easeInCubic`, `easeInOutCubic` | KEPT | Reached by string through the consumed `resolveEasing` — the capability is consumed, the name isn't |
+| `Easing` | KEPT | Declared type of `resolveEasing`'s return and of every sequence's `easing` |
+| `BoilHandle` | KEPT | Declared return type of the consumed `createBoilTicker` |
+| `RasterStackHandle`, `RasterStackOptions` | KEPT | The consumed `useRasterStack`'s return and options types |
+| `PoseSvgParts` | KEPT | The consumed `serializePoseSvg`'s parameter type |
+
+### Gates
+
+`npm test` runs 12 Node proof lanes, 219 assertions — `raster-blob` (18) and `stop-contract`
+(26) are new. `npm run proof:browser` runs 6 tests across chromium and webkit, including the
+new pixel-identity lane. Both were born RED against the pre-cure tree and the transcripts are
+banked.
+
 ## 0.10.1 — 2026-07-31 (the stale-ink patch)
 
 ### Fixed

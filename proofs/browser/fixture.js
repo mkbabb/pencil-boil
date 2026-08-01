@@ -1,6 +1,6 @@
 /**
  * The browser identity fixture — mounts a live filtered pose stack and, from the SHIPPED
- * `rasterizePose` (served transpiled at /raster.js), captures the SAME poses to bitmaps.
+ * `rasterizePoseToBlob` (served transpiled at /raster.js), captures the SAME poses to blobs.
  * It exposes `window.__proof` for the Playwright lane to drive per engine at DPR2:
  *
  *   (a) untainted  — a same-origin serialized-blob SVG draws to a CORS-clean canvas
@@ -19,7 +19,7 @@
  * "unresolved color var baked to its fallback" defect that Node's string guard cannot see
  * (it stays self-contained) but the pixel gate does: a full-box luminance shift craters SSIM.
  */
-import { serializePoseSvg, isSelfContainedSvg, rasterizePose } from '/raster.js';
+import { serializePoseSvg, isSelfContainedSvg, rasterizePoseToBlob } from '/raster.js';
 
 const POSE_COUNT = 4;
 const BOX = 240; // CSS px; captured at BOX * dpr device px (480 at DPR2)
@@ -230,7 +230,7 @@ function decodePng(b64) {
 }
 
 /**
- * (d) identity — SSIM between the SHIPPED-`rasterizePose` capture and the live compositor
+ * (d) identity — SSIM between the SHIPPED-`rasterizePoseToBlob` capture and the live compositor
  * render (passed in as a PNG the engine screenshotted), decoded and compared IN this engine.
  */
 async function identity(pose, livePngB64) {
@@ -243,13 +243,7 @@ async function identity(pose, livePngB64) {
   lctx.drawImage(liveImg, 0, 0, n, n);
   const live = lctx.getImageData(0, 0, n, n).data;
 
-  const bmp = await rasterizePose(captureSvg(pose), { width: BOX, height: BOX }, dpr());
-  const cc = document.createElement('canvas');
-  cc.width = n;
-  cc.height = n;
-  const cctx = cc.getContext('2d', { willReadFrequently: true });
-  cctx.drawImage(bmp, 0, 0);
-  const cap = cctx.getImageData(0, 0, n, n).data;
+  const cap = (await decodeBlobPixels(await rasterizePoseToBlob(captureSvg(pose), { width: BOX, height: BOX }, dpr()))).data;
 
   // exact-match % and maxΔ (per channel) — the crit-safari §6 metrics, for the record.
   let exact = 0;
@@ -272,6 +266,147 @@ async function identity(pose, livePngB64) {
   };
 }
 
+// ── (e) PIXEL IDENTITY: the 0.11 blob path vs the 0.10.1 round trip it retires ─────────
+//
+// Through 0.10.1 a consumer that wanted a durable artifact took `rasterizePose`'s
+// `ImageBitmap`, drew it into a SECOND surface, and PNG-encoded that. 0.11 encodes the
+// capture canvas directly. The claim is that no pixel moves. The retired pipeline no longer
+// exists in the library, so the reference is reproduced HERE, verbatim in shape — including
+// the capture-intrinsic stamp (0.10.0's truth-fix), without which the two arms would raster
+// at different resolutions and the comparison would be vacuous.
+
+/** `raster.ts`'s `stampCaptureIntrinsic`, reproduced for the reference arm. */
+function stampIntrinsic(svg, w, h) {
+  const end = svg.indexOf('>') + 1;
+  const root = svg
+    .slice(0, end)
+    .replace(/\s(?:width|height)="[^"]*"/g, '')
+    .replace('<svg', `<svg width="${w}" height="${h}"`);
+  return root + svg.slice(end);
+}
+
+/** Blob → `<img>` → canvas: the capture both arms share. */
+function drawStampedPose(svg, w, h) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(
+      new Blob([stampIntrinsic(svg, w, h)], { type: 'image/svg+xml;charset=utf-8' }),
+    );
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      resolve(c);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('reference arm: SVG blob failed to load'));
+    };
+    img.src = url;
+  });
+}
+
+/** The RETIRED pipeline: capture → ImageBitmap copy → second surface → PNG encode. */
+async function legacyRoundTrip(svg, w, h) {
+  const canvas = await drawStampedPose(svg, w, h);
+  const bmp = await createImageBitmap(canvas); // the copy 0.11 deletes
+  let blob;
+  if (typeof OffscreenCanvas !== 'undefined') {
+    const oc = new OffscreenCanvas(bmp.width, bmp.height); // the consumer's second surface
+    oc.getContext('2d').drawImage(bmp, 0, 0);
+    blob = await oc.convertToBlob({ type: 'image/png' }); // the encode 0.11 deletes
+  } else {
+    const c2 = document.createElement('canvas');
+    c2.width = bmp.width;
+    c2.height = bmp.height;
+    c2.getContext('2d').drawImage(bmp, 0, 0);
+    blob = await new Promise((res, rej) =>
+      c2.toBlob((b) => (b ? res(b) : rej(new Error('reference arm: toBlob null'))), 'image/png'),
+    );
+  }
+  bmp.close();
+  return blob;
+}
+
+/** Decode a PNG blob back to RGBA bytes IN this engine. */
+async function decodeBlobPixels(blob) {
+  const bmp = await createImageBitmap(blob);
+  // Read the box BEFORE close() — a closed bitmap reports 0×0.
+  const w = bmp.width;
+  const h = bmp.height;
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bmp, 0, 0);
+  const px = ctx.getImageData(0, 0, w, h);
+  bmp.close();
+  return { data: px.data, w, h };
+}
+
+/**
+ * (e) PIXEL IDENTITY — one fixed pose through both paths, decoded and compared byte for
+ * byte (RGBA, alpha included). Also reports each arm's wall time and the encoded PNG sizes;
+ * the timings are a RECORD, not a gate (a headless host's numbers are not the device's).
+ */
+async function blobIdentity(pose) {
+  const svg = captureSvg(pose);
+  const n = deviceBox();
+
+  const t0 = performance.now();
+  const fresh = await rasterizePoseToBlob(svg, { width: BOX, height: BOX }, dpr());
+  const msNew = performance.now() - t0;
+
+  const t1 = performance.now();
+  const legacy = await legacyRoundTrip(svg, n, n);
+  const msOld = performance.now() - t1;
+
+  const a = await decodeBlobPixels(fresh);
+  const b = await decodeBlobPixels(legacy);
+
+  if (a.w !== b.w || a.h !== b.h) {
+    return { boxMatch: false, w: a.w, h: a.h, refW: b.w, refH: b.h };
+  }
+
+  let differing = 0;
+  let maxDelta = 0;
+  for (let i = 0; i < a.data.length; i++) {
+    const d = Math.abs(a.data[i] - b.data[i]);
+    if (d !== 0) differing++;
+    if (d > maxDelta) maxDelta = d;
+  }
+
+  const freshBytes = new Uint8Array(await fresh.arrayBuffer());
+  const legacyBytes = new Uint8Array(await legacy.arrayBuffer());
+  let pngIdentical = freshBytes.length === legacyBytes.length;
+  if (pngIdentical) {
+    for (let i = 0; i < freshBytes.length; i++) {
+      if (freshBytes[i] !== legacyBytes[i]) {
+        pngIdentical = false;
+        break;
+      }
+    }
+  }
+
+  return {
+    boxMatch: true,
+    w: a.w,
+    h: a.h,
+    differingBytes: differing,
+    totalBytes: a.data.length,
+    maxDelta,
+    inkNew: inkCount(a.data),
+    inkOld: inkCount(b.data),
+    pngIdentical,
+    pngBytesNew: freshBytes.length,
+    pngBytesOld: legacyBytes.length,
+    msNew,
+    msOld,
+  };
+}
+
 /** Every capture SVG is self-contained (no currentColor/var leak) — so the identity result
  *  is the PIXEL gate biting, never the string guard. Stays true even under the fault knob. */
 function allSelfContained() {
@@ -286,5 +421,6 @@ window.__proof = {
   setLivePose,
   taintAndHash,
   identity,
+  blobIdentity,
   allSelfContained,
 };

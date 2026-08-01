@@ -30,7 +30,6 @@ export {
   type SequenceHandle,
   type RasterStackHandle,
   useLineBoil,
-  useFilterParamBoil,
   useRasterStack,
   createBoilTicker,
   createSequenceSubscription,
@@ -44,10 +43,9 @@ export {
   type RasterStackOptions,
   serializePoseSvg,
   isSelfContainedSvg,
-  rasterizePose,
-  rasterizePoseStack,
+  rasterizePoseToBlob,
 } from './raster';
 
 export { isBoilHeld, acquireHold, releaseHold, heldFrameCount } from './boilHoldGate';
 
-export { useBoilCache, useBoilFrames } from './frames';
+export { useBoilCache } from './frames';

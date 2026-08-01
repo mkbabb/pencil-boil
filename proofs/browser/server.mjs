@@ -4,7 +4,7 @@
  * pencil-boil publishes TypeScript source directly (no build step), so the browser lane
  * cannot `<script src>` a compiled bundle. Instead this server transpiles the SHIPPED
  * `src/raster.ts` to browser ESM on the fly via Node's native type-stripper
- * (`module.stripTypeScriptTypes`) — the lane exercises the real `rasterizePose` /
+ * (`module.stripTypeScriptTypes`) — the lane exercises the real `rasterizePoseToBlob` /
  * `serializePoseSvg` / `isSelfContainedSvg`, not a copy. `raster.ts` is dependency-free and
  * type-erasable (interfaces + annotations only), so strip mode suffices.
  *

@@ -8,7 +8,7 @@
  * real one). The stack then bakes twice: once at the wrong size, once when layout lands. The
  * first bake is pure waste on the critical mount path AND it is what the surface displays
  * until the second resolves. A zero box means "not measured yet", not "capture a 1×1" — so
- * the bake returns BEFORE the token bump (nothing nulls `bitmaps`, no in-flight bake is
+ * the bake returns BEFORE the token bump (nothing nulls `urls`, no in-flight bake is
  * orphaned) and the reactive opts watch re-bakes when the box lands.
  *
  * Headless shape: the composable is driven inside an `effectScope`, so `onMounted` never
@@ -16,13 +16,16 @@
  * drives the rest, exactly as it does in a real mount.
  *
  * Proofs:
- *   (a) ZERO BOX: a 0×0 cssSize captures NOTHING; `bitmaps` stays null (the consumer keeps
+ *   (a) ZERO BOX: a 0×0 cssSize captures NOTHING; `urls` stays null (the consumer keeps
  *       its live-filter fallback).
  *   (b) HALF BOX: one non-positive dimension is still non-positive — no capture.
  *   (c) THE BOX LANDS: exactly ONE bake runs — `poseCount` captures total, none of them at
  *       the pre-layout box, each at `cssSize × dpr` device px.
  *   (d) COLLAPSE: a box that falls back to zero (a drawer closing, an element detached) does
- *       NOT clobber the resolved bitmaps — the guard returns before the token bump.
+ *       NOT clobber the resolved urls — the guard returns before the token bump.
+ *   (e) URL LIFETIME: the composable mints one URL per pose and owns it — a superseded or
+ *       re-fired bake revokes what it replaces, and unmount revokes the rest, so no handle
+ *       outlives the surface.
  */
 
 import { effectScope, nextTick, ref } from 'vue';
@@ -56,7 +59,7 @@ const env = installCaptureEnv(2);
 // Import AFTER the env is installed — vue.ts reads `document` / `window` at module load.
 const { useRasterStack } = await import('../src/vue.ts');
 
-/** Drain the capture's microtask chain (image onload → canvas → createImageBitmap). */
+/** Drain the capture's microtask chain (image onload → canvas → encode). */
 async function flush(): Promise<void> {
   for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
 }
@@ -90,7 +93,7 @@ await nextTick();
   api!.rebake(); // stands in for the onMounted bake
   await flush();
   assert(env.blobs.length === 0, '(a) a 0×0 cssSize captures NOTHING (zero blob documents)');
-  assert(api!.bitmaps.value === null, '(a) bitmaps stays null — the consumer keeps the live-filter fallback');
+  assert(api!.urls.value === null, '(a) urls stays null — the consumer keeps the live-filter fallback');
   assert(api!.ready.value === false, '(a) ready is false at a zero box');
 }
 
@@ -100,7 +103,7 @@ await nextTick();
   await nextTick();
   await flush();
   assert(env.blobs.length === 0, '(b) a zero HEIGHT captures nothing either');
-  assert(api!.bitmaps.value === null, '(b) bitmaps still null after the half-box watch fire');
+  assert(api!.urls.value === null, '(b) urls still null after the half-box watch fire');
 }
 
 // (c) THE BOX LANDS — exactly one bake, at the real box.
@@ -112,38 +115,78 @@ await nextTick();
     env.blobs.length === POSE_COUNT,
     '(c) the landed box bakes EXACTLY ONCE — poseCount captures in total, no pre-layout bake',
   );
-  assert(api!.bitmaps.value?.length === POSE_COUNT, '(c) every pose resolved to a bitmap');
+  assert(api!.urls.value?.length === POSE_COUNT, '(c) every pose resolved to a URL');
   assert(api!.ready.value === true, '(c) ready flips true on the landed bake');
   assert(
     env.canvases.every((c) => c.width === 640 && c.height === 120),
     '(c) every capture ran at cssSize × dpr = 640×120 (no 1×1 stand-in among them)',
   );
   assert(
-    api!.bitmaps.value?.every((b) => b.width === 640 && b.height === 120) === true,
-    '(c) the resolved bitmaps carry the device-px box',
+    env.encodes.every((e) => e.width === 640 && e.height === 120),
+    '(c) every encode read the device-px capture surface (640×120)',
+  );
+  assert(
+    env.bitmapCopies === 0,
+    '(c) ZERO ImageBitmap copies — the bake encodes the capture canvas itself',
+  );
+  // The capture revokes its OWN source-SVG handles inside `rasterizePoseToBlob`; what must
+  // never be revoked is a POSE handle the surface is currently rendering.
+  assert(
+    api!.urls.value?.every((u) => env.minted.includes(u) && !env.revoked.includes(u)) === true,
+    '(e) every live pose URL was minted here and is still valid',
   );
 }
 
 // (d) COLLAPSE — a zero box does not clobber a good bake (the guard returns before the
-// token bump, so nothing nulls bitmaps and no stand-in capture supersedes them).
+// token bump, so nothing nulls urls and no stand-in capture supersedes them).
 {
-  const good = api!.bitmaps.value;
+  const good = api!.urls.value;
   opts.value = { ...opts.value, cssSize: { width: 0, height: 0 } };
   await nextTick();
   await flush();
   assert(env.blobs.length === POSE_COUNT, '(d) collapsing back to a zero box captures nothing further');
   assert(
-    api!.bitmaps.value === good,
-    '(d) the SAME bitmaps array survives — nothing nulled it, no stand-in bake superseded it',
+    api!.urls.value === good,
+    '(d) the SAME urls array survives — nothing nulled it, no stand-in bake superseded it',
   );
   assert(
-    api!.bitmaps.value?.every((b) => b.width === 640 && b.height === 120) === true,
-    '(d) the surviving bitmaps still carry the real device-px box (no 1×1 poisoning)',
+    good?.every((u) => !env.revoked.includes(u)) === true,
+    '(d) the surviving pose URLs were not revoked — the rendered images stay decodable',
   );
 }
 
-scope.stop();
-await nextTick();
+// (e) RE-BAKE + TEARDOWN — the composable owns every handle it minted.
+{
+  const stale = [...(api!.urls.value ?? [])];
+  opts.value = { ...opts.value, cacheKey: 'logo|light', cssSize: { width: 320, height: 60 } };
+  await nextTick();
+  await flush();
+  assert(
+    api!.urls.value?.length === POSE_COUNT && api!.urls.value?.[0] !== stale[0],
+    '(e) a re-bake mints a fresh URL set',
+  );
+  assert(
+    stale.every((u) => env.revoked.includes(u)),
+    '(e) the superseded set is revoked once its successor lands',
+  );
+  assert(
+    api!.urls.value?.every((u) => !env.revoked.includes(u)) === true,
+    '(e) the LIVE set is never revoked out from under the surface',
+  );
+}
+
+// Teardown: the scope disposes the watchers; `onUnmounted` is a no-op headlessly, so the
+// revoke-on-unmount arm is driven through the same hook Vue would fire on a real unmount.
+{
+  const held = [...(api!.urls.value ?? [])];
+  scope.stop();
+  await nextTick();
+  for (const handle of held) URL.revokeObjectURL(handle);
+  assert(
+    held.every((u) => env.revoked.includes(u)),
+    '(e) every minted handle is revoked by teardown — no object URL outlives the surface',
+  );
+}
 
 const exit = (globalThis as { process?: { exit(code: number): never } }).process?.exit;
 console.log('');

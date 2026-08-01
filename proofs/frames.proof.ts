@@ -1,5 +1,5 @@
 /**
- * frames.proof — the useBoilFrames memoizing-cache invariants.
+ * frames.proof — the useBoilCache memoizing-cache invariants.
  *
  *   node --import ./proofs/loader.mjs proofs/frames.proof.ts
  *
@@ -12,7 +12,7 @@
  * so insertion order is fully controlled — the LRU case runs first, on an empty cache.
  */
 
-import { useBoilFrames } from '../src/frames.ts';
+import { useBoilCache } from '../src/frames.ts';
 
 let passed = 0;
 const failures: string[] = [];
@@ -34,34 +34,34 @@ function assert(cond: boolean, label: string): void {
     calls += 1;
     return [v];
   };
-  useBoilFrames(['A'], gen('A'), 3); // miss => calls 1
-  useBoilFrames(['B'], gen('B'), 3); // miss => calls 2
-  useBoilFrames(['C'], gen('C'), 3); // miss => calls 3 (cache: A,B,C — at cap, no evict)
-  useBoilFrames(['A'], gen('A'), 3); // hit => touch A (cache: B,C,A); calls unchanged
+  useBoilCache(['A'], gen('A'), 3); // miss => calls 1
+  useBoilCache(['B'], gen('B'), 3); // miss => calls 2
+  useBoilCache(['C'], gen('C'), 3); // miss => calls 3 (cache: A,B,C — at cap, no evict)
+  useBoilCache(['A'], gen('A'), 3); // hit => touch A (cache: B,C,A); calls unchanged
   assert(calls === 3, '(c) a cache hit does not re-run the generator');
 
-  useBoilFrames(['D'], gen('D'), 3); // miss => calls 4; size 4 > 3 => evict oldest (B)
+  useBoilCache(['D'], gen('D'), 3); // miss => calls 4; size 4 > 3 => evict oldest (B)
   const before = calls;
-  useBoilFrames(['A'], gen('A'), 3); // hit — A was touched, so it survived eviction
+  useBoilCache(['A'], gen('A'), 3); // hit — A was touched, so it survived eviction
   assert(calls === before, '(c) a touched entry survives LRU eviction');
-  useBoilFrames(['B'], gen('B'), 3); // miss — B was the evicted oldest
+  useBoilCache(['B'], gen('B'), 3); // miss — B was the evicted oldest
   assert(calls === before + 1, '(c) the untouched oldest entry was evicted');
 }
 
 // (a) memoization — same key returns the same array reference.
 {
-  const r1 = useBoilFrames(['X', 1, 2], () => [1, 2, 3]);
-  const r2 = useBoilFrames(['X', 1, 2], () => [9, 9, 9]);
+  const r1 = useBoilCache(['X', 1, 2], () => [1, 2, 3]);
+  const r2 = useBoilCache(['X', 1, 2], () => [9, 9, 9]);
   assert(r1 === r2, '(a) a repeated key returns the same cached array (generator runs once)');
   assert(r1[0] === 1 && r1.length === 3, '(a) the cached value is the first generation, not the second');
 }
 
 // (b) float key normalization — non-integers quantize to 4 decimals.
 {
-  const a = useBoilFrames(['k', 1.000011], () => ['a']);
-  const b = useBoilFrames(['k', 1.000012], () => ['b']); // same key within 4 decimals
+  const a = useBoilCache(['k', 1.000011], () => ['a']);
+  const b = useBoilCache(['k', 1.000012], () => ['b']); // same key within 4 decimals
   assert(a === b, '(b) float parts within 4 decimals share a key');
-  const c = useBoilFrames(['k', 1.0009], () => ['c']); // differs at the 4th decimal
+  const c = useBoilCache(['k', 1.0009], () => ['c']); // differs at the 4th decimal
   assert(c[0] === 'c' && c !== a, '(b) float parts differing at 4 decimals key distinctly');
 }
 

@@ -30,7 +30,7 @@
  *       read the post-change cascade.
  *   (c) NO THRASH: the flip costs exactly `poseCount` captures, not two rounds of them.
  *   (d) SUPERSESSION: two flips inside one frame resolve to the FINAL cascade, and the
- *       superseded bake neither clobbers the bitmaps nor leaves them null.
+ *       superseded bake neither clobbers the baked URLs nor leaves them null.
  */
 
 import { effectScope, nextTick, ref, watch } from 'vue';
@@ -137,7 +137,7 @@ const inked = (svg: string, hex: string) => svg.includes(`fill="${hex}"`);
     '(b) no pose carried the ink of the theme just left',
   );
   assert(
-    api!.bitmaps.value?.length === POSE_COUNT,
+    api!.urls.value?.length === POSE_COUNT,
     '(b) the re-bake resolved — the surface is not stranded on the fallback',
   );
 }
@@ -155,8 +155,8 @@ const inked = (svg: string, hex: string) => svg.includes(`fill="${hex}"`);
     '(d) a double flip resolves to the FINAL cascade, not to the one it passed through',
   );
   assert(
-    api!.bitmaps.value?.length === POSE_COUNT,
-    '(d) the superseded bake left the bitmaps resolved, not null',
+    api!.urls.value?.length === POSE_COUNT,
+    '(d) the superseded bake left the baked URLs resolved, not null',
   );
 }
 

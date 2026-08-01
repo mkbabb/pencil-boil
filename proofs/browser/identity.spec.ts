@@ -1,7 +1,7 @@
 /**
  * proof:browser — the identity gate the Node harness cannot see (FAM-1, the 0.9.0 latent
  * vacuous green). Node stubs `window`/`rAF` but has no canvas, no `ImageBitmap`, no SVG
- * layout, so `rasterizePose`'s browser-only invariant ships un-asserted unless a real engine
+ * layout, so the capture's browser-only invariant ships un-asserted unless a real engine
  * runs it. This lane runs it in BOTH chromium and webkit at DPR2 and asserts:
  *
  *   (a) untainted      — a same-origin serialized-blob capture reads back (no CORS taint)

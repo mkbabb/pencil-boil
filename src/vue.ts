@@ -6,9 +6,8 @@
  *
  * - path-boil frame cycling — `useLineBoil`: advance a discrete frame ref modulo a frame
  *   total every N ms.
- * - SVG filter `baseFrequency` (or any) per-tick side effect — `useFilterParamBoil`.
- * - imperative glyph wiggle — `createBoilTicker` (ping-pongs a frame index; created
- *   after mount, owns its own start/stop).
+ * - imperative glyph wiggle / any per-tick side effect — `createBoilTicker` (ping-pongs a
+ *   frame index; created after mount, owns its own start/stop).
  * - one-shot eased draw-ins / flourishes — `createSequenceSubscription` (the
  *   `sequence` kind: a wall-clock tween that self-unsubscribes on completion).
  *
@@ -60,7 +59,7 @@ import {
   type Ref,
 } from 'vue';
 import { easeOutCubic, linear, type Easing } from './easings';
-import { rasterizePose, type RasterStackOptions } from './raster';
+import { rasterizePoseToBlob, type RasterStackOptions } from './raster';
 
 function normalizeFrameCount(value: number): number {
   if (!Number.isFinite(value)) return 1;
@@ -325,7 +324,36 @@ export function usePrefersReducedMotion(): Readonly<Ref<boolean>> {
 
 export interface BoilHandle {
   start: () => void;
+  /** Withdraws the subscriber. NEVER throws, in any lifecycle phase — see the contract above. */
   stop: () => void;
+}
+
+// ── THE stop() NO-THROW CONTRACT (0.11.0) ──
+//
+// Every `stop()` this module hands out returns without throwing, in every lifecycle phase:
+// before start, mid-flight, from inside its own tick, after completion, twice, after a
+// central PRM clear, after teardown. A caller never needs `try { h.stop() } catch {}` — and
+// a codebase carrying those wrappers cannot tell a reader whether they defend against a real
+// throw or hide a lifecycle bug, which is why the guarantee belongs here.
+//
+// The withdrawal is ORDERED so the contract costs nothing in truth: the two statements that
+// must land are total by construction (a boolean write and `Set.delete`), and they run
+// FIRST. Only the host-facing teardown can throw — `cancelAnimationFrame` / `clearTimeout`
+// are patchable by an embedding page (analytics shims, zone-style monkey-patches, a
+// torn-down iframe's dead `window`) — and by the time it runs the subscriber is already out
+// of the set, so a throwing host cannot leave a withdrawn subscriber enrolled. That is the
+// negative control `proofs/stop-contract.proof.ts` asserts alongside the no-throw arms: the
+// swallow hides nothing, because nothing that matters happens after it.
+function withdraw(sub: Subscriber): void {
+  sub.active = false;
+  subscribers.delete(sub);
+  try {
+    maybeStopScheduler();
+  } catch {
+    // `maybeStopScheduler` writes `schedulerRunning = false` BEFORE it cancels, so the
+    // module's own state is already consistent; what threw is the host's timer API, and
+    // whatever it leaked is the host's. stop() returns.
+  }
 }
 
 function createSubscription(
@@ -340,12 +368,7 @@ function createSubscription(
     subscribers.add(sub);
     ensureScheduler();
   }
-  function stop() {
-    sub.active = false;
-    subscribers.delete(sub);
-    maybeStopScheduler();
-  }
-  return { sub, handle: { start, stop } };
+  return { sub, handle: { start, stop: () => withdraw(sub) } };
 }
 
 // ── useLineBoil — the frame-cycling composable ──
@@ -388,51 +411,35 @@ export function useLineBoil(
   return { currentFrame, start: handle.start, stop: handle.stop };
 }
 
-// ── useFilterParamBoil — generic per-tick side effect (e.g. SVG filter baseFrequency) ──
-
-/**
- * Run an arbitrary side effect every `intervalMs` on the shared chain. Unlike
- * {@link useLineBoil} it cycles no Vue-reactive ref — its `onTick(steps)` fires the
- * effect directly (deliberately bypassing reactivity for hot DOM writes). Gated on PRM
- * and tab visibility for free; owns its own teardown on unmount.
- */
-export function useFilterParamBoil(
-  onTick: (steps: number) => void,
-  intervalMs: MaybeRefOrGetter<number> = 125,
-): BoilHandle {
-  const { handle } = createSubscription(onTick, () => normalizeInterval(toValue(intervalMs)));
-  const stopWatch = watchEffect(() => {
-    if (prmRef.value) handle.stop();
-    else handle.start();
-  });
-  onUnmounted(() => {
-    stopWatch();
-    handle.stop();
-  });
-  return handle;
-}
-
-// ── useRasterStack — bitmap pose cache, driven off the shared beat (0.9.0) ──
+// ── useRasterStack — baked pose cache, driven off the shared beat (0.9.0) ──
 //
 // The WebKit cure: instead of a resident filtered stack that re-rasters its feTurbulence +
 // feDisplacementMap chain on every opacity flip (~150–224 ms board-area raster per beat in
-// WebKit, ~2 cores at idle), capture each frozen pose to an ImageBitmap ONCE (`raster.ts`)
-// and opacity-swap the bitmaps on the beat — no filter re-executes at steady state, in
-// either engine. This composable orchestrates the bake: it drives `pose` off the shared
-// beat (through `useLineBoil`, so the same scheduler/PRM/visibility gates carry), captures
-// each pose FRESH per bake (no cross-bake bitmap memo — the consumer owns the bitmap: it
-// converts each to an object URL and `close()`s it, so a memoized-then-closed bitmap can
-// never be re-handed to a warm re-bake), and exposes `bitmaps` (null until the bake resolves;
-// render the live-filter fallback while null), `ready`, `pose`, and `rebake`.
+// WebKit, ~2 cores at idle), capture each frozen pose ONCE (`raster.ts`) and opacity-swap
+// the baked images on the beat — no filter re-executes at steady state, in either engine.
+// This composable orchestrates the bake: it drives `pose` off the shared beat (through
+// `useLineBoil`, so the same scheduler/PRM/visibility gates carry), captures each pose FRESH
+// per bake (no cross-bake memo — a re-bake exists precisely because the pixels changed), and
+// exposes `urls` (null until the bake resolves; render the live-filter fallback while null),
+// `ready`, `pose`, and `rebake`.
 //
-// RE-BAKE TRIGGERS (each changes the captured pixels, so the bitmaps go stale):
+// THE HANDLE IS URLs, NOT BITMAPS (0.11.0). What a surface renders is an `<image>` / `<img>`
+// decoding an object URL; that decode is the single resident raster. Handing back an
+// `ImageBitmap` made every consumer walk the same three extra steps to reach the URL —
+// re-draw into a second surface, PNG-encode it, close the redundant bitmap — for a copy and
+// an encode the capture had already paid for (79–195 ms + 87–112 ms per pose, ≈98% of a
+// measured ~280 ms WebKit re-bake stall). The composable now mints the URLs itself and owns
+// their lifetime: the previous set is revoked when the new one lands, a superseded bake
+// revokes what it minted rather than leaking it, and unmount revokes the rest.
+//
+// RE-BAKE TRIGGERS (each changes the captured pixels, so the baked images go stale):
 //   • DPR change — the window dragged between monitors; watched via a self-re-arming
 //     `matchMedia('(resolution: Ndppx)')` at the live ratio.
 //   • theme flip — light↔dark changes ink/line/fill colors; the consumer flips `cacheKey`
 //     and the reactive-opts watch re-bakes (masked by the Bloom gesture at the toggle).
 //   • `document.fonts.ready` — a `<text>` pose (logo Fraunces) must bake AFTER the face
-//     loads, else the bitmap freezes the fallback glyphs; the first bake awaits it.
-// While a (re-)bake is in flight `bitmaps` is null — the consumer keeps the live-filter
+//     loads, else the bake freezes the fallback glyphs; the first bake awaits it.
+// While a (re-)bake is in flight `urls` is null — the consumer keeps the live-filter
 // fallback mounted (one filtered raster per appearance, the sanctioned transient).
 //
 // Every bake yields one paint boundary (`nextPaint`) before it captures, so a `poseSvg` that
@@ -463,9 +470,12 @@ function nextPaint(): Promise<void> {
 }
 
 export interface RasterStackHandle {
-  /** null until the bake resolves — render the live-filter fallback while null. */
-  bitmaps: Readonly<Ref<ImageBitmap[] | null>>;
-  /** true once every pose bitmap has resolved. */
+  /**
+   * Pose-indexed object URLs for the baked images — null until the bake resolves (render the
+   * live-filter fallback while null). The composable owns their lifetime: never revoke these.
+   */
+  urls: Readonly<Ref<string[] | null>>;
+  /** true once every pose has baked. */
   ready: Readonly<Ref<boolean>>;
   /** current pose index, advanced off the shared beat (`stepEveryBeats` forwarded). */
   pose: Readonly<Ref<number>>;
@@ -474,7 +484,7 @@ export interface RasterStackHandle {
 }
 
 /**
- * Vue composable for the bitmap pose cache. `opts` is a `RasterStackOptions` (reactive
+ * Vue composable for the baked pose cache. `opts` is a `RasterStackOptions` (reactive
  * ref/getter supported — a theme flip that changes `cacheKey`/`cssSize` re-bakes);
  * `stepEveryBeats` advances the pose once every N shared beats (default 1). See the block
  * comment above for the re-bake triggers. A single-pose stack never subscribes to the beat.
@@ -483,8 +493,14 @@ export function useRasterStack(
   opts: MaybeRefOrGetter<RasterStackOptions>,
   stepEveryBeats: MaybeRefOrGetter<number> = 1,
 ): RasterStackHandle {
-  const bitmaps = ref<ImageBitmap[] | null>(null);
-  const ready = computed(() => bitmaps.value !== null);
+  const urls = ref<string[] | null>(null);
+  const ready = computed(() => urls.value !== null);
+  /** The set currently rendered (or last rendered) — revoked when its successor lands. */
+  let live: string[] = [];
+
+  function revokeAll(handles: string[]): void {
+    for (const handle of handles) URL.revokeObjectURL(handle);
+  }
 
   // pose rides the shared beat through useLineBoil — same scheduler, same PRM/visibility
   // gates. Interval = the beat × stepEveryBeats, so the pose advances every N beats aligned
@@ -508,7 +524,7 @@ export function useRasterStack(
     // opts watch re-bakes the instant the box lands.
     if (!(o.cssSize.width > 0) || !(o.cssSize.height > 0)) return;
     const token = ++bakeToken;
-    bitmaps.value = null; // fall back to the live filter while the (re-)bake is in flight
+    urls.value = null; // fall back to the live filter while the (re-)bake is in flight
     // Capture only once the change that TRIGGERED this bake is readable. A theme flip fires
     // this watch in the same flush that the theme library writes `<html class>` in, and
     // `poseSvg` resolves its ink off the cascade — capture synchronously and every pose bakes
@@ -517,22 +533,30 @@ export function useRasterStack(
     if (token !== bakeToken) return; // superseded while yielding
     const dpr =
       o.dpr ?? (Number.isFinite(window.devicePixelRatio) ? window.devicePixelRatio : 1);
-    const captures: Promise<ImageBitmap>[] = [];
+    const captures: Promise<Blob>[] = [];
     for (let p = 0; p < o.poseCount; p++) {
-      // Capture fresh, NOT through the shared boil LRU: the consumer converts each resolved
-      // bitmap to an object URL and closes it (the URL/decode is the durable render artifact,
-      // the bitmap the redundant copy). A memoized bitmap that the consumer closed would
-      // resolve CLOSED on a warm re-bake — a poisoned re-display. Fresh-per-bake is the cost
-      // of letting the double residency die; the re-bake is masked (Bloom) and DPR-capped.
-      captures.push(rasterizePose(o.poseSvg(p), o.cssSize, dpr));
+      // Capture fresh, NOT through the shared boil LRU: a re-bake fires precisely because
+      // the pixels changed (DPR, theme, font), so a memo would hand back exactly the stale
+      // artifact the re-bake exists to replace.
+      captures.push(rasterizePoseToBlob(o.poseSvg(p), o.cssSize, dpr));
     }
     try {
-      const baked = await Promise.all(captures);
-      if (token === bakeToken) bitmaps.value = baked; // ignore a superseded bake
+      const minted = (await Promise.all(captures)).map((blob) => URL.createObjectURL(blob));
+      if (token !== bakeToken) {
+        revokeAll(minted); // superseded while encoding — release what this bake minted
+        return;
+      }
+      const stale = live;
+      live = minted;
+      urls.value = minted;
+      // Revoke only AFTER the successor is renderable: the outgoing images stay valid for
+      // the frames between the swap and the browser's decode of the new ones.
+      revokeAll(stale);
     } catch {
-      // Leave bitmaps null — the consumer keeps the live-filter fallback. A hard capture
-      // failure under a fixed key caches the rejection, but the real re-bake triggers (DPR,
-      // theme) mint a new key, so a transient failure does not wedge the surface.
+      // Leave urls null — the consumer keeps the live-filter fallback, and the previous set
+      // stays live and revocable at unmount. A hard capture failure under a fixed key
+      // persists, but the real re-bake triggers (DPR, theme) change the key, so a transient
+      // failure does not wedge the surface.
     }
   }
 
@@ -586,10 +610,13 @@ export function useRasterStack(
     bakeToken++; // orphan any in-flight bake
     stopOptsWatch();
     stopDprWatch?.();
+    revokeAll(live);
+    live = [];
+    urls.value = null;
   });
 
   return {
-    bitmaps: bitmaps as Readonly<Ref<ImageBitmap[] | null>>,
+    urls: urls as Readonly<Ref<string[] | null>>,
     ready,
     pose: pose as Readonly<Ref<number>>,
     rebake,
@@ -641,6 +668,11 @@ export function createBoilTicker(
 
 export interface SequenceHandle {
   start: () => void;
+  /**
+   * Withdraws the tween. NEVER throws, in any lifecycle phase — including mid-tween, from
+   * inside `onProgress`, after `onComplete` has already self-unsubscribed it, and on a
+   * handle that never started (the inert one PRM hands back).
+   */
   stop: () => void;
 }
 
@@ -670,12 +702,7 @@ export function createSequenceSubscription(opts: {
     subscribers.add(sub);
     ensureScheduler();
   }
-  function stop() {
-    sub.active = false;
-    subscribers.delete(sub);
-    maybeStopScheduler();
-  }
-  return { start, stop };
+  return { start, stop: () => withdraw(sub) };
 }
 
 // ── createStrokeDrawIn — stroke-dashoffset draw-in on the shared chain ──
