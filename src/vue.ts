@@ -49,7 +49,7 @@
 import {
   computed,
   nextTick,
-  onMounted,
+  onScopeDispose,
   onUnmounted,
   ref,
   toValue,
@@ -439,14 +439,53 @@ export function useLineBoil(
 //     and the reactive-opts watch re-bakes (masked by the Bloom gesture at the toggle).
 //   • `document.fonts.ready` — a `<text>` pose (logo Fraunces) must bake AFTER the face
 //     loads, else the bake freezes the fallback glyphs; the first bake awaits it.
+//   • cssSize change — the surface was re-laid-out, so the captured pixel box moved.
 // While a (re-)bake is in flight `urls` is null — the consumer keeps the live-filter
 // fallback mounted (one filtered raster per appearance, the sanctioned transient).
+//
+// THE SIZE-KEYED STACK CACHE (0.12.0). Through 0.11 this composable held exactly one baked
+// stack and re-encoded on every trigger, on the stated reasoning that "a re-bake exists
+// precisely because the pixels changed." That is true of DPR, theme and font — and false of
+// the trigger that dominates in practice. A layout that TOGGLES between two boxes (a drawer
+// opening and closing, a rail folding) walks a size the surface just baked, and the encode
+// it pays is for pixels the composable had already produced and thrown away.
+//
+// The refutation is not "memoize anyway", it is that the old key was too narrow. The cache
+// key is the FULL capture identity — `cacheKey` + dpr + `cssSize` + `poseCount` + whether
+// the fonts had settled — so nothing the library knows can change under a live entry, and a
+// hit is a hit on every input the capture reads. Re-entering a cached size performs ZERO
+// encodes and hands back the SAME `Blob`s: byte-identical by object identity, not by
+// tolerance. `poseCacheSize: 1` restores the 0.11 shape exactly (the previous stack is
+// revoked as its successor lands), so the incumbent survives as a configuration rather than
+// as a deleted branch.
+//
+// WHAT THE KEY CANNOT SEE, stated because it is the cache's one real hazard: `poseSvg` is a
+// consumer callback entitled to read the live cascade, so a consumer that changes captured
+// ink WITHOUT moving `cacheKey` will now be served its own stale bake instead of quietly
+// re-encoding it. That was always the `cacheKey` contract ("MUST encode theme"); the cache
+// makes breaking it visible. `rebake()` is the escape hatch and it FORCES — it drops the
+// current key's entry before re-capturing, so "call for anything else" still means anything.
+//
+// WHY A CACHE AND NOT A THREAD (measured, pass-6 BC5-G4): the encode cannot be moved off the
+// main thread from here. In WebKit `OffscreenCanvas.convertToBlob` called on the main thread
+// blocks the main thread exactly as `HTMLCanvasElement.toBlob` does — 66–74 ms vs 62–77 ms
+// for the same eight poses, against a 0 ms idle floor — so 0.11's move to `toBlob` forfeited
+// no threading, and no rearrangement of the capture recovers any. Only a real Worker encodes
+// off-thread (0 ms blocked), and a Worker cannot rasterize an SVG that resolves against the
+// page's cascade. The encode a surface does not perform is the only encode that is free.
 //
 // Every bake yields one paint boundary (`nextPaint`) before it captures, so a `poseSvg` that
 // resolves its ink off the live cascade reads the change that triggered the bake and not the
 // state it replaced.
 
 const BEAT_MS = 125; // the stop-motion beat useLineBoil defaults to — one clock, app-wide.
+
+/**
+ * Resident baked stacks per surface when `poseCacheSize` is unset. Four covers the shape the
+ * cache exists for — a box that toggles between two values, across a theme flip — without
+ * holding a history no layout will walk back through.
+ */
+const DEFAULT_POSE_CACHE = 4;
 
 /**
  * One paint boundary: past the current flush cycle, then past a frame.
@@ -495,11 +534,52 @@ export function useRasterStack(
 ): RasterStackHandle {
   const urls = ref<string[] | null>(null);
   const ready = computed(() => urls.value !== null);
-  /** The set currently rendered (or last rendered) — revoked when its successor lands. */
-  let live: string[] = [];
 
   function revokeAll(handles: string[]): void {
     for (const handle of handles) URL.revokeObjectURL(handle);
+  }
+
+  /**
+   * Baked stacks by capture identity, insertion-ordered (a `Map` iterates in insertion
+   * order, so re-inserting on a hit IS the LRU touch). The cache OWNS every handle it holds:
+   * a URL is revoked when its entry is evicted, dropped or the surface unmounts, and never
+   * while it is resident — so a cached stack stays renderable for as long as it is reachable.
+   */
+  const stacks = new Map<string, string[]>();
+  /** The key currently rendered — the one `rebake()` must drop to mean "force". */
+  let liveKey: string | null = null;
+
+  /** The full capture identity — every input the bake reads that the library can see. */
+  function stackKey(o: RasterStackOptions, dpr: number): string {
+    return `${o.cacheKey}|${dpr}|${o.cssSize.width}x${o.cssSize.height}|${o.poseCount}`;
+  }
+
+  /** Release every resident stack — the cache is the sole owner of what it holds. */
+  function clearStacks(): void {
+    for (const held of stacks.values()) revokeAll(held);
+    stacks.clear();
+    liveKey = null;
+  }
+
+  /** Insert, touch recency, and evict past the cap — revoking exactly what leaves. */
+  function retain(key: string, minted: string[], cap: number): void {
+    stacks.delete(key);
+    stacks.set(key, minted);
+    while (stacks.size > cap) {
+      const oldest = stacks.keys().next().value as string;
+      if (oldest === key) break; // never evict the entry just minted
+      const evicted = stacks.get(oldest);
+      stacks.delete(oldest);
+      if (evicted) revokeAll(evicted);
+    }
+  }
+
+  /** Drop one entry and release its handles. */
+  function drop(key: string): void {
+    const gone = stacks.get(key);
+    if (!gone) return;
+    stacks.delete(key);
+    revokeAll(gone);
   }
 
   // pose rides the shared beat through useLineBoil — same scheduler, same PRM/visibility
@@ -523,6 +603,24 @@ export function useRasterStack(
     // bump: no in-flight bake is orphaned and no resolved bitmaps are nulled; the reactive
     // opts watch re-bakes the instant the box lands.
     if (!(o.cssSize.width > 0) || !(o.cssSize.height > 0)) return;
+    const dprNow =
+      o.dpr ?? (Number.isFinite(window.devicePixelRatio) ? window.devicePixelRatio : 1);
+
+    // THE HIT, taken before anything else costs anything. A resident stack was captured
+    // under this exact identity, so re-encoding it could only reproduce it. Serve it whole
+    // and synchronously: no token bump (nothing is in flight to supersede), no `urls = null`
+    // (the surface never drops to its live-filter fallback), no paint boundary, no encode.
+    // This is the entire cure for a layout returning to a box it just left.
+    const hitKey = stackKey(o, dprNow);
+    const hit = stacks.get(hitKey);
+    if (hit) {
+      bakeToken++; // orphan any bake still in flight — this stack supersedes it
+      retain(hitKey, hit, Math.max(1, o.poseCacheSize ?? DEFAULT_POSE_CACHE));
+      liveKey = hitKey;
+      urls.value = hit;
+      return;
+    }
+
     const token = ++bakeToken;
     urls.value = null; // fall back to the live filter while the (re-)bake is in flight
     // Capture only once the change that TRIGGERED this bake is readable. A theme flip fires
@@ -546,12 +644,16 @@ export function useRasterStack(
         revokeAll(minted); // superseded while encoding — release what this bake minted
         return;
       }
-      const stale = live;
-      live = minted;
+      // Key on what was actually captured, not on what was current when the bake was
+      // requested: DPR and font settling can both move across the paint boundary above.
+      const key = stackKey(o, dpr);
+      // The cap evicts the least recently served stack and revokes ONLY on eviction, so the
+      // outgoing images stay valid for the frames between the swap and the browser's decode
+      // of the new ones — 0.11's ordering property, now a consequence of the cap rather than
+      // a hand-placed revoke. At `poseCacheSize: 1` the two are the same statement.
+      retain(key, minted, Math.max(1, o.poseCacheSize ?? DEFAULT_POSE_CACHE));
+      liveKey = key;
       urls.value = minted;
-      // Revoke only AFTER the successor is renderable: the outgoing images stay valid for
-      // the frames between the swap and the browser's decode of the new ones.
-      revokeAll(stale);
     } catch {
       // Leave urls null — the consumer keeps the live-filter fallback, and the previous set
       // stays live and revocable at unmount. A hard capture failure under a fixed key
@@ -560,20 +662,34 @@ export function useRasterStack(
     }
   }
 
+  // FORCE, and it has to mean it: the cache would otherwise answer with the very artifact
+  // the caller is asking to replace. Dropping the live key first turns the next bake into a
+  // guaranteed miss, so "call for anything else" keeps the meaning it had before the cache.
   function rebake(): void {
+    if (liveKey) drop(liveKey);
     void bake();
   }
 
   // First bake waits for the font face so a <text> pose bakes the real glyphs, not the
-  // fallback; fonts.ready resolves immediately when nothing is pending. Mount-gated so the
-  // capture only runs client-side.
-  onMounted(() => {
+  // fallback; fonts.ready resolves immediately when nothing is pending. `bake()` is its own
+  // SSR guard (it returns off-DOM), so this needs no mount hook — and not needing one is why
+  // the composable now works inside a bare `effectScope` as well as inside a component.
+  //
+  // EVERY stack baked before the face landed is stale, not just the current one: the opts
+  // watch can have raced a bake in at a size the layout has since left, and that stack would
+  // sit in the cache holding fallback glyphs, waiting to be served the next time the layout
+  // came back. So the font gate CLEARS the cache rather than keying around it — one line,
+  // and it cannot leave a fallback-glyph stack anywhere.
+  {
     const fontsReady =
       typeof document !== 'undefined' && document.fonts?.ready
         ? document.fonts.ready
         : Promise.resolve();
-    void fontsReady.then(() => bake());
-  });
+    void fontsReady.then(() => {
+      clearStacks();
+      return bake();
+    });
+  }
 
   // theme / cssSize / dpr change through the reactive opts → re-bake, keyed on the stable
   // capture inputs so an unrelated opts-identity change does not thrash the bake.
@@ -606,14 +722,20 @@ export function useRasterStack(
     };
   }
 
-  onUnmounted(() => {
+  // Teardown rides the effect SCOPE, not the component. `onUnmounted` fires only inside a
+  // component instance, so a composable driven in a bare `effectScope` — a headless proof, a
+  // store, a renderless orchestrator — leaked every handle it ever minted and no gate could
+  // see it. A component's `setup` runs inside a scope of its own, so `onScopeDispose` fires
+  // on unmount exactly as `onUnmounted` did, and additionally where `onUnmounted` never did.
+  onScopeDispose(() => {
     bakeToken++; // orphan any in-flight bake
     stopOptsWatch();
     stopDprWatch?.();
-    revokeAll(live);
-    live = [];
+    // The cache is the sole owner, so draining it releases every handle the surface ever
+    // minted — resident stacks and the live one alike. No handle outlives the surface.
+    clearStacks();
     urls.value = null;
-  });
+  }, true);
 
   return {
     urls: urls as Readonly<Ref<string[] | null>>,

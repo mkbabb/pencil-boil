@@ -29,8 +29,10 @@
  *   (b) THE FLIP: after one flip, every newly captured pose carries the DARK ink — the bake
  *       read the post-change cascade.
  *   (c) NO THRASH: the flip costs exactly `poseCount` captures, not two rounds of them.
- *   (d) SUPERSESSION: two flips inside one frame resolve to the FINAL cascade, and the
- *       superseded bake neither clobbers the baked URLs nor leaves them null.
+ *   (d1) SUPERSESSION ONTO A CACHED STACK: two flips inside one frame that land back on a
+ *        resident theme return that theme's OWN handles, capture nothing, and never null.
+ *   (d2) SUPERSESSION WITH A COLD LANDING: the same race onto a key never baked — a capture
+ *        runs, and every pose it serializes carries the ink of the theme it LANDED on.
  */
 
 import { effectScope, nextTick, ref, watch } from 'vue';
@@ -74,6 +76,9 @@ const POSE_COUNT = 2;
 // The cascade: a plain cell, NOT reactive — `getComputedStyle` is not reactive either.
 let cascadeInk = LIGHT;
 const isDark = ref(false);
+// The capture box, movable — arm (d2) needs a theme flip that lands on a key the size-keyed
+// stack cache (0.12.0) has never seen, so the capture race is actually run and not skipped.
+const box = ref(60);
 // The theme library's `<html>` class write. `post` flush, so it lands AFTER the `pre` watcher
 // the raster stack keys its re-bake on — the ordering that IS the defect.
 watch(
@@ -99,7 +104,7 @@ scope.run(() => {
         // The cascade read at capture time — the whole point.
         body: `<text x="0" y="48" fill="${cascadeInk}" filter="url(#w-p${pose})">sudoku</text>`,
       }),
-    cssSize: { width: 320, height: 60 },
+    cssSize: { width: 320, height: box.value },
   }));
 });
 await nextTick();
@@ -142,21 +147,59 @@ const inked = (svg: string, hex: string) => svg.includes(`fill="${hex}"`);
   );
 }
 
-// (d) SUPERSESSION — two flips inside one frame: the last cascade wins, exactly once.
+// (d1) SUPERSESSION ONTO A CACHED STACK — two flips inside one frame, landing back on the
+// theme the surface just baked. As of 0.12.0 the dark stack is still resident, so the correct
+// outcome is not "re-capture the final cascade" but "return the final cascade's own artifact,
+// and orphan the light bake that was mid-flight." Asserted by HANDLE IDENTITY, which is
+// stricter than re-reading the ink: it says the surface ends on the very blobs the dark
+// cascade produced, not merely on blobs that happen to serialize the same string.
 {
+  const darkUrls = [...(api!.urls.value ?? [])];
   env.reset();
   isDark.value = false;
   await nextTick();
   isDark.value = true;
   await nextTick();
+  const midUrls = api!.urls.value;
+  await flush();
+  assert(
+    env.blobs.length === 0,
+    '(d1) the round trip captures NOTHING — the final cascade is already baked and resident',
+  );
+  assert(
+    api!.urls.value?.length === POSE_COUNT &&
+      api!.urls.value!.every((u, i) => u === darkUrls[i]),
+    '(d1) the surface ends on the FINAL cascade’s own stack, handle for handle',
+  );
+  assert(
+    midUrls !== null && midUrls.every((u, i) => u === darkUrls[i]),
+    '(d1) and it never passed through null — the superseded light bake was orphaned, not shown',
+  );
+}
+
+// (d2) SUPERSESSION WITH A COLD LANDING — the same race, but the final key has never been
+// baked (the box moves with the theme), so a capture genuinely runs and the born-RED-at-0.10.0
+// coverage stands: whatever it captures must carry the ink of the theme it LANDED on.
+{
+  env.reset();
+  isDark.value = false;
+  box.value = 61;
+  await nextTick();
+  isDark.value = true;
+  box.value = 62;
+  await nextTick();
   await flush();
   assert(
     env.blobs.length > 0 && env.blobs.every((b) => inked(b, DARK)),
-    '(d) a double flip resolves to the FINAL cascade, not to the one it passed through',
+    '(d2) a double flip onto a COLD key resolves to the FINAL cascade, not the one passed through',
+  );
+  assert(
+    !env.blobs.some((b) => inked(b, LIGHT)),
+    '(d2) no capture carried the ink of the theme the flip passed through',
   );
   assert(
     api!.urls.value?.length === POSE_COUNT,
-    '(d) the superseded bake left the baked URLs resolved, not null',
+    '(d2) the superseded bake left the baked URLs resolved, not null',
   );
 }
 
