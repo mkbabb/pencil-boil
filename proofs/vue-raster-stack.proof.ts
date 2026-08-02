@@ -23,9 +23,10 @@
  *       the pre-layout box, each at `cssSize × dpr` device px.
  *   (d) COLLAPSE: a box that falls back to zero (a drawer closing, an element detached) does
  *       NOT clobber the resolved urls — the guard returns before the token bump.
- *   (e) URL LIFETIME: the composable mints one URL per pose and owns it — a superseded or
- *       re-fired bake revokes what it replaces, and unmount revokes the rest, so no handle
- *       outlives the surface.
+ *   (e) URL LIFETIME: the composable mints one URL per pose and OWNS it — a superseded set
+ *       stays valid and reachable in the size-keyed cache (0.12.0) rather than being revoked
+ *       at the swap, and teardown revokes every handle the surface ever minted, so no handle
+ *       outlives the surface and none is pulled out from under a rendered image.
  */
 
 import { effectScope, nextTick, ref } from 'vue';
@@ -165,9 +166,15 @@ await nextTick();
     api!.urls.value?.length === POSE_COUNT && api!.urls.value?.[0] !== stale[0],
     '(e) a re-bake mints a fresh URL set',
   );
+  // 0.12.0 changed WHEN the superseded set dies, not WHO owns it. The theme flip above is a
+  // key change, and the cache retains the stack it left: flipping back is then free, and the
+  // outgoing images stay decodable for the frames between the swap and the new decode — the
+  // property the old revoke-at-swap ordering was written to protect, now structural.
+  // `poseCacheSize: 1` restores revoke-at-swap exactly, and raster-stack-cache.proof (g)
+  // asserts it there.
   assert(
-    stale.every((u) => env.revoked.includes(u)),
-    '(e) the superseded set is revoked once its successor lands',
+    stale.every((u) => !env.revoked.includes(u)),
+    '(e) the superseded set is RETAINED and still valid — the cache holds it for the return',
   );
   assert(
     api!.urls.value?.every((u) => !env.revoked.includes(u)) === true,
@@ -175,16 +182,22 @@ await nextTick();
   );
 }
 
-// Teardown: the scope disposes the watchers; `onUnmounted` is a no-op headlessly, so the
-// revoke-on-unmount arm is driven through the same hook Vue would fire on a real unmount.
+// Teardown. This arm used to revoke the handles ITSELF and then assert they were revoked —
+// a check that could not fail and therefore measured nothing. `useRasterStack` tears down on
+// `onScopeDispose` as of 0.12.0, which fires inside a bare `effectScope` as well as inside a
+// component, so the composable's OWN cleanup is what runs here and the assertion has teeth.
 {
   const held = [...(api!.urls.value ?? [])];
+  const revokedBefore = env.revoked.length;
   scope.stop();
   await nextTick();
-  for (const handle of held) URL.revokeObjectURL(handle);
   assert(
     held.every((u) => env.revoked.includes(u)),
     '(e) every minted handle is revoked by teardown — no object URL outlives the surface',
+  );
+  assert(
+    env.revoked.length > revokedBefore,
+    '(e) the composable revoked them, not the proof — teardown did the work itself',
   );
 }
 

@@ -106,6 +106,18 @@ export interface RasterStackOptions {
   cssSize: { width: number; height: number };
   /** Capture ratio (default `devicePixelRatio`). */
   dpr?: number;
+  /**
+   * How many baked pose stacks `useRasterStack` keeps resident, keyed on the full capture
+   * identity (`cacheKey` + dpr + `cssSize` + `poseCount`). Default **4**. Re-entering a size
+   * already in the cache costs ZERO encodes and returns the SAME blobs, byte for byte.
+   *
+   * Set **1** for the pre-0.12 behaviour: only the current stack is held, and every size
+   * change re-encodes even when the layout is merely returning to where it just was.
+   *
+   * Cost is memory: one entry is `poseCount` PNGs at `cssSize × dpr`. Raise it for a surface
+   * that cycles through many sizes, lower it for a large surface that only ever grows.
+   */
+  poseCacheSize?: number;
 }
 
 /** The current environment's device pixel ratio, or 1 when off-DOM. */
