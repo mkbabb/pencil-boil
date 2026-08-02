@@ -1,4 +1,4 @@
-import { mulberry32 } from './random';
+import { mulberry32 } from './random.js';
 
 export interface WobbleOptions {
   roughness?: number;
@@ -312,4 +312,3 @@ export function ellipsePoints(
   }
   return points;
 }
-

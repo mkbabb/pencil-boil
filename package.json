@@ -1,26 +1,34 @@
 {
   "name": "@mkbabb/pencil-boil",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Hand-drawn boil utilities for SVG and Vue 3.",
   "type": "module",
-  "main": "./src/index.ts",
-  "module": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "sideEffects": false,
   "exports": {
-    ".": "./src/index.ts",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
-    "src",
+    "dist",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc",
     "check": "tsc --noEmit",
-    "proof": "node --import ./proofs/loader.mjs proofs/boil-guard.proof.ts && node --import ./proofs/loader.mjs proofs/frames.proof.ts && node --import ./proofs/loader.mjs proofs/cache.proof.ts && node --import ./proofs/loader.mjs proofs/prebake.proof.ts && node --import ./proofs/loader.mjs proofs/celestial.proof.ts && node --import ./proofs/loader.mjs proofs/raster-serialize.proof.ts && node --import ./proofs/loader.mjs proofs/raster-capture.proof.ts && node --import ./proofs/loader.mjs proofs/raster-blob.proof.ts && node --import ./proofs/loader.mjs proofs/vue-raster-stack.proof.ts && node --import ./proofs/loader.mjs proofs/raster-theme-flip.proof.ts && node --import ./proofs/loader.mjs proofs/hold.proof.ts && node --import ./proofs/loader.mjs proofs/stop-contract.proof.ts",
-    "test": "npm run check && npm run proof",
-    "proof:browser": "playwright test"
+    "verify:package": "npm run build && node proofs/package-boundary.proof.mjs",
+    "proof": "node --import ./proofs/loader.mjs proofs/boil-guard.proof.ts && node --import ./proofs/loader.mjs proofs/frames.proof.ts && node --import ./proofs/loader.mjs proofs/cache.proof.ts && node --import ./proofs/loader.mjs proofs/prebake.proof.ts && node --import ./proofs/loader.mjs proofs/celestial.proof.ts && node --import ./proofs/loader.mjs proofs/raster-serialize.proof.ts && node --import ./proofs/loader.mjs proofs/raster-capture.proof.ts && node --import ./proofs/loader.mjs proofs/raster-blob.proof.ts && node --import ./proofs/loader.mjs proofs/vue-raster-stack.proof.ts && node --import ./proofs/loader.mjs proofs/raster-stack-cache.proof.ts && node --import ./proofs/loader.mjs proofs/raster-theme-flip.proof.ts && node --import ./proofs/loader.mjs proofs/hold.proof.ts && node --import ./proofs/loader.mjs proofs/stop-contract.proof.ts",
+    "test": "npm run check && npm run proof && npm run verify:package",
+    "proof:browser": "npm run build && playwright test",
+    "prepack": "npm run build"
   },
   "keywords": [
     "svg",
@@ -33,8 +41,7 @@
   "author": "mkbabb",
   "license": "Unlicense",
   "engines": {
-    "node": ">=24",
-    "npm": ">=11"
+    "node": ">=22"
   },
   "packageManager": "npm@11.12.1",
   "peerDependencies": {

@@ -1,6 +1,7 @@
 /**
  * The browser identity fixture — mounts a live filtered pose stack and, from the SHIPPED
- * `rasterizePoseToBlob` (served transpiled at /raster.js), captures the SAME poses to blobs.
+ * `rasterizePoseToBlob` (served from the exact packed artifact at /raster.js), captures the
+ * SAME poses to blobs.
  * It exposes `window.__proof` for the Playwright lane to drive per engine at DPR2:
  *
  *   (a) untainted  — a same-origin serialized-blob SVG draws to a CORS-clean canvas

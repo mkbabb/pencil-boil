@@ -16,11 +16,14 @@
  * (an unresolved color var baked to its fallback — self-contained, so Node's guard misses it)
  * shifts the whole box and drops SSIM below 0.98.
  */
+import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 
 const SSIM_FLOOR = 0.98;
 const POSE_COUNT = 4;
 const DEVICE_BOX = 480; // BOX(240) * DPR2
+const packageJson = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
+const RUN_TOKEN = process.env.PENCIL_BROWSER_RUN_TOKEN;
 
 declare global {
   interface Window {
@@ -42,6 +45,23 @@ declare global {
     };
   }
 }
+
+test.beforeAll(async ({ request, baseURL }) => {
+  expect(RUN_TOKEN, 'browser proof run token').toBeTruthy();
+  const response = await request.get(`${baseURL}/_proof/health/${RUN_TOKEN}`);
+  expect(response.status(), 'authenticated server identity status').toBe(200);
+  const identity = await response.json();
+  expect(identity.token, 'identity token').toBe(RUN_TOKEN);
+  expect(identity.name, 'identity package name').toBe(packageJson.name);
+  expect(identity.version, 'identity package version').toBe(packageJson.version);
+  expect(identity.tarballSha256, 'identity tarball SHA-256').toMatch(/^[0-9a-f]{64}$/);
+  expect(
+    Number.isInteger(identity.bytes) && identity.bytes > 0,
+    'identity tarball bytes',
+  ).toBe(true);
+  expect(identity.served, 'identity served artifact').toBe('package/dist/raster.js');
+  expect(identity.srcServed, 'identity source route').toBe(false);
+});
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/fixture.html');
