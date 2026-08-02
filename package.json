@@ -1,6 +1,6 @@
 {
   "name": "@mkbabb/pencil-boil",
-  "version": "0.11.2",
+  "version": "0.12.0",
   "description": "Hand-drawn boil utilities for SVG and Vue 3.",
   "type": "module",
   "main": "./dist/index.js",
@@ -25,7 +25,7 @@
     "build": "npm run clean && tsc",
     "check": "tsc --noEmit",
     "verify:package": "npm run build && node proofs/package-boundary.proof.mjs",
-    "proof": "node --experimental-strip-types --import ./proofs/loader.mjs proofs/boil-guard.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/frames.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/cache.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/prebake.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/celestial.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/raster-serialize.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/raster-capture.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/raster-blob.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/vue-raster-stack.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/raster-theme-flip.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/hold.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/stop-contract.proof.ts",
+    "proof": "node --experimental-strip-types --import ./proofs/loader.mjs proofs/boil-guard.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/frames.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/cache.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/prebake.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/celestial.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/raster-serialize.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/raster-capture.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/raster-blob.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/vue-raster-stack.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/raster-stack-cache.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/raster-theme-flip.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/hold.proof.ts && node --experimental-strip-types --import ./proofs/loader.mjs proofs/stop-contract.proof.ts",
     "test": "npm run check && npm run proof && npm run verify:package",
     "proof:browser": "npm run build && playwright test",
     "prepack": "npm run build"

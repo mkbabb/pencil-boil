@@ -116,6 +116,17 @@ export interface RasterStackOptions {
    *
    * Cost is memory: one entry is `poseCount` PNGs at `cssSize × dpr`. Raise it for a surface
    * that cycles through many sizes, lower it for a large surface that only ever grows.
+   *
+   * THE DEFAULT IS MEASURED, NOT DERIVED, and here is the trigger for re-deriving it. Four
+   * was read off the shape the cache exists for: a box that toggles between TWO values,
+   * across a theme flip — 2 × 2 residents, nothing held that no layout walks back through.
+   * It is not a bound on anything. A surface whose `cssSize` is a CONTINUOUS function of the
+   * viewport walks a new size per resize frame, and at any finite cap that is a pure eviction
+   * treadmill: correct, and exactly as expensive as the pre-0.12 single-slot shape. The cure
+   * there is upstream of this option — QUANTIZE the capture box (`Math.round(s / 4) * 4`)
+   * so a drag lands on a size the surface has already baked — and only once the box is
+   * quantized does raising this number buy anything. Re-derive when a consumer's quantized
+   * size ladder is longer than four rungs and it walks them.
    */
   poseCacheSize?: number;
 }

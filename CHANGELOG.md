@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.12.0 — 2026-08-02 (a return trip encodes nothing)
+
+### Added
+
+**`useRasterStack` keeps baked stacks per capture size.** The composable held exactly one
+stack and re-encoded on every trigger, reasoning that a re-bake exists precisely because the
+pixels changed. True of DPR, theme and font; false of the trigger that dominates. A layout
+that toggles between two boxes — a drawer opening and closing, a rail folding — walks a size
+the surface baked moments earlier and pays a full round of PNG encodes to reproduce pixels it
+had already produced and thrown away.
+
+The old key was too narrow, so the fix is a wider key rather than a memo bolted on: stacks are
+held by the FULL capture identity (`cacheKey` + dpr + `cssSize` + `poseCount` + font
+readiness), and a hit returns the SAME `Blob`s — byte-identical by object identity, not by
+tolerance. The cache owns every handle it holds: a URL is revoked on eviction, on drop, or at
+teardown, and never while it is resident. `rebake()` drops the live entry before re-capturing,
+so force still forces, and the font gate CLEARS the cache rather than keying around it —
+every stack baked before the face landed is stale, not merely the current one.
+
+Measured on the consuming app (playwright-webkit, 1280×810 DPR2, drawer open/close/open ×3,
+same instrument both arms). BEFORE: the grid stack re-encodes on 9 of 9 gestures, 261–383 ms
+blocked. AFTER: 2 of 9, both a fresh page's first open — after its first bake the grid never
+re-encodes, and a pure cache-hit gesture blocks 0–78 ms. Byte identity checked by fetching the
+blobs back off the live DOM: a hit's payloads hash equal to a fresh encode's.
+
+**`poseCacheSize` (default 4)** caps residency. At **1** the composable reproduces the 0.11
+shape exactly, so the incumbent survives as a configuration rather than as a deleted branch.
+The default is measured, not derived, and the option now carries its own re-derivation
+trigger: quantize a continuously-resizable capture box before raising the cap, because at any
+finite cap an unquantized drag is a pure eviction treadmill.
+
+### Fixed
+
+**Teardown fires outside a component.** `onUnmounted` became `onScopeDispose`, which runs
+inside a bare `effectScope` as well as inside a component — the composable used to leak every
+handle it minted outside a component instance, and no gate could see it, because the teardown
+assertion revoked the handles itself before checking they were revoked. That assertion now has
+teeth.
+
+### Notes
+
+`proofs/raster-stack-cache.proof.ts` is born RED against 0.11.2: 11 of its 24 assertions fail
+there, including a live control arm that re-runs the whole size walk at `poseCacheSize: 1` and
+asserts the re-encode this release removes. It is wired into `npm run proof`, which the 0.11.x
+packaging migration had blocked.
+
+No threading was forfeited and none is recoverable from in here: in WebKit
+`OffscreenCanvas.convertToBlob` on the main thread blocks it exactly as
+`HTMLCanvasElement.toBlob` does (66–74 ms vs 62–77 ms for the same eight poses against a 0 ms
+idle floor), and only a real Worker encodes off-thread — which cannot rasterize an SVG that
+resolves against the page's cascade. The encode a surface does not perform is the only encode
+that is free.
+
 ## 0.11.2 — 2026-08-02 (the Node 22 proof invocation)
 
 The Node proof lane now explicitly enables `--experimental-strip-types`, which Node 22.9
