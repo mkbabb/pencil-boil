@@ -19,10 +19,13 @@ const execFile = promisify(execFileCallback);
 const repositoryRoot = resolve(dirname(new URL(import.meta.url).pathname), '..');
 const packageJson = JSON.parse(readFileSync(join(repositoryRoot, 'package.json'), 'utf8'));
 const packageVersion = packageJson.version;
+const providedTarballPath = process.env.PENCIL_PACKAGE_TARBALL
+  ? resolve(process.env.PENCIL_PACKAGE_TARBALL)
+  : null;
 const temporaryRoot = mkdtempSync(join(tmpdir(), 'pencil-package-boundary-'));
 const packDirectory = join(temporaryRoot, 'pack');
 const consumerRoot = join(temporaryRoot, 'consumer');
-mkdirSync(packDirectory);
+if (!providedTarballPath) mkdirSync(packDirectory);
 mkdirSync(consumerRoot);
 
 const commands = [];
@@ -74,23 +77,40 @@ function writeConsumerFile(name, contents) {
 }
 
 try {
-  const pack = await run('npm', [
-    'pack',
-    '--ignore-scripts',
-    '--json',
-    '--silent',
-    '--pack-destination',
-    packDirectory,
-  ]);
-  const records = JSON.parse(pack.stdout);
-  assert.equal(records.length, 1, 'pack must produce exactly one tarball');
-  const packRecord = records[0];
-  assert.equal(packRecord.name, packageJson.name);
-  assert.equal(packRecord.version, packageVersion);
-  const tarballPath = join(packDirectory, packRecord.filename);
+  let tarballPath = providedTarballPath;
+  let packedMembership = null;
+  if (tarballPath) {
+    assert.ok(existsSync(tarballPath), 'provided package tarball exists');
+  } else {
+    const pack = await run('npm', [
+      'pack',
+      '--ignore-scripts',
+      '--json',
+      '--silent',
+      '--pack-destination',
+      packDirectory,
+    ]);
+    const records = JSON.parse(pack.stdout);
+    assert.equal(records.length, 1, 'pack must produce exactly one tarball');
+    const packRecord = records[0];
+    assert.equal(packRecord.name, packageJson.name);
+    assert.equal(packRecord.version, packageVersion);
+    tarballPath = join(packDirectory, packRecord.filename);
+    packedMembership = packRecord.files.map((entry) => entry.path).sort();
+  }
   assert.ok(existsSync(tarballPath), 'packed tarball exists');
   const tarballIdentity = sha256(tarballPath);
-  const membership = packRecord.files.map((entry) => entry.path).sort();
+  const tarListing = await run('tar', ['-tzf', tarballPath]);
+  const tarEntries = tarListing.stdout.trim().split(/\r?\n/).filter(Boolean);
+  assert.ok(tarEntries.length > 0, 'tarball contains entries');
+  assert.ok(tarEntries.every((entry) => entry.startsWith('package/')), 'tarball entries use package/ root');
+  const membership = tarEntries
+    .filter((entry) => !entry.endsWith('/'))
+    .map((entry) => entry.slice('package/'.length))
+    .sort();
+  if (packedMembership) {
+    assert.deepEqual(membership, packedMembership, 'npm pack record matches tarball membership');
+  }
   assert.ok(membership.includes('dist/index.js'), 'tarball contains dist/index.js');
   assert.ok(membership.includes('dist/index.d.ts'), 'tarball contains dist/index.d.ts');
   assert.ok(!membership.some((entry) => entry === 'src' || entry.startsWith('src/')), 'tarball contains no src tree');
@@ -101,6 +121,7 @@ try {
   const tarPackage = JSON.parse(
     (await run('tar', ['-xOf', tarballPath, 'package/package.json'])).stdout,
   );
+  assert.equal(tarPackage.name, packageJson.name, 'tarball package name matches package under test');
   assert.equal(tarPackage.version, packageVersion, 'tarball package version matches package under test');
 
   writeConsumerFile(
@@ -131,6 +152,8 @@ try {
   assert.equal(lstatSync(installedVuePath).isSymbolicLink(), false, 'Vue dependency is not a symlink');
   const installedPackage = JSON.parse(readFileSync(join(installedPackagePath, 'package.json'), 'utf8'));
   const installedVue = JSON.parse(readFileSync(join(installedVuePath, 'package.json'), 'utf8'));
+  assert.equal(installedPackage.name, packageJson.name, 'installed package name matches tarball');
+  assert.equal(installedPackage.version, packageVersion, 'installed package version matches tarball');
 
   writeConsumerFile(
     'runtime.mjs',
@@ -189,9 +212,11 @@ try {
   result.terminal = 'CLEAN';
   result.pack = {
     path: tarballPath,
+    callerProvided: Boolean(providedTarballPath),
     sha256: tarballIdentity.sha256,
     bytes: tarballIdentity.bytes,
     membership,
+    packageName: tarPackage.name,
     packageVersion: tarPackage.version,
   };
   result.install = {
@@ -227,6 +252,9 @@ try {
     temporaryRoot,
     packDirectoryAbsent: !existsSync(packDirectory),
     consumerRootAbsent: !existsSync(consumerRoot),
+    callerOwnedTarballPreserved: providedTarballPath
+      ? existsSync(providedTarballPath)
+      : null,
   };
   result.terminal = failure ? 'RED' : 'CLEAN';
   console.log(JSON.stringify(result));

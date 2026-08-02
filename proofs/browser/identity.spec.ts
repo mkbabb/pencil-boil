@@ -59,6 +59,23 @@ test.beforeAll(async ({ request, baseURL }) => {
     Number.isInteger(identity.bytes) && identity.bytes > 0,
     'identity tarball bytes',
   ).toBe(true);
+  expect(identity.packageProof.terminal, 'package proof terminal').toBe('CLEAN');
+  expect(identity.packageProof.matchesServedTarball, 'package proof authenticated served tarball').toBe(true);
+  expect(identity.packageProof.tarballSha256, 'package proof tarball SHA-256').toBe(
+    identity.tarballSha256,
+  );
+  expect(identity.packageProof.bytes, 'package proof tarball bytes').toBe(identity.bytes);
+  expect(identity.packageProof.installed, 'package proof installed identity').toEqual({
+    name: packageJson.name,
+    version: packageJson.version,
+  });
+  expect(identity.packageProof.runtimeRequired, 'package proof required runtime exports').toBe(7);
+  expect(identity.packageProof.typeModes, 'package proof type modes').toEqual([
+    'Bundler',
+    'Node16',
+    'NodeNext',
+  ]);
+  expect(identity.packageProof.callerTarballPreserved, 'package proof caller tarball preservation').toBe(true);
   expect(identity.served, 'identity served artifact').toBe('package/dist/raster.js');
   expect(identity.srcServed, 'identity source route').toBe(false);
 });

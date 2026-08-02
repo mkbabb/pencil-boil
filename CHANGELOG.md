@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.2 — 2026-08-02 (the Node 22 proof invocation)
+
+The Node proof lane now explicitly enables `--experimental-strip-types`, which Node 22.9
+requires to execute the TypeScript proof entrypoints. The resolver registration remains the
+extension-safe bridge from the package's `.js` source specifiers to the local proof sources.
+This successor replaces the failed, unpublished 0.11.1 tag generation; `v0.11.1` remains the
+immutable record of that failed release attempt.
+
 ## 0.11.1 — 2026-08-01 (the installed package boundary)
 
 Pencil now publishes compiled JavaScript and declarations from `dist/` with a Node ESM

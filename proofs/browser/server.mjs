@@ -94,6 +94,32 @@ async function initialize() {
   const tarballPath = join(packDirectory, record.filename);
   const tarball = readFileSync(tarballPath);
   const tarballSha256 = createHash('sha256').update(tarball).digest('hex');
+  const packageProofRun = await execFile(
+    process.execPath,
+    [join(repoRoot, 'proofs', 'package-boundary.proof.mjs')],
+    {
+      cwd: repoRoot,
+      env: { ...process.env, PENCIL_PACKAGE_TARBALL: tarballPath },
+      maxBuffer: 16 * 1024 * 1024,
+    },
+  );
+  const packageProofLines = packageProofRun.stdout.trim().split(/\r?\n/).filter(Boolean);
+  assert.equal(packageProofLines.length, 1, 'package boundary proof emits one JSON result');
+  const packageProof = JSON.parse(packageProofLines[0]);
+  assert.equal(packageProof.terminal, 'CLEAN', 'package boundary proof terminal');
+  assert.equal(packageProof.pack.callerProvided, true, 'package boundary proof used caller tarball');
+  assert.equal(packageProof.pack.sha256, tarballSha256, 'package proof tarball SHA-256 equality');
+  assert.equal(packageProof.pack.bytes, tarball.length, 'package proof tarball byte equality');
+  assert.equal(packageProof.pack.packageName, packageJson.name, 'package proof package name');
+  assert.equal(packageProof.pack.packageVersion, packageJson.version, 'package proof package version');
+  assert.equal(
+    packageProof.cleanup.callerOwnedTarballPreserved,
+    true,
+    'package boundary proof preserves caller tarball',
+  );
+  assert.ok(existsSync(tarballPath), 'browser-owned tarball survives package boundary proof');
+  const packageProofMatchesTarball =
+    packageProof.pack.sha256 === tarballSha256 && packageProof.pack.bytes === tarball.length;
   await execFile('tar', ['-xzf', tarballPath, '-C', extractDirectory], {
     cwd: repoRoot,
     maxBuffer: 1024 * 1024,
@@ -109,6 +135,16 @@ async function initialize() {
     version: packageJson.version,
     tarballSha256,
     bytes: tarball.length,
+    packageProof: {
+      terminal: packageProof.terminal,
+      matchesServedTarball: packageProofMatchesTarball,
+      tarballSha256: packageProof.pack.sha256,
+      bytes: packageProof.pack.bytes,
+      installed: packageProof.install.package,
+      runtimeRequired: packageProof.runtime.required.length,
+      typeModes: Object.keys(packageProof.types).sort(),
+      callerTarballPreserved: packageProof.cleanup.callerOwnedTarballPreserved,
+    },
     served: 'package/dist/raster.js',
     srcServed: false,
   };
@@ -138,7 +174,8 @@ async function initialize() {
   server.listen(PORT, '127.0.0.1', () => {
     console.log(
       `[proof:browser] packed ${identity.name}@${identity.version} ` +
-        `sha256=${identity.tarballSha256} bytes=${identity.bytes} served=${identity.served} src-served=${identity.srcServed} ` +
+        `sha256=${identity.tarballSha256} bytes=${identity.bytes} package-proof=same ` +
+        `served=${identity.served} src-served=${identity.srcServed} ` +
         `http://127.0.0.1:${PORT}`,
     );
   });
