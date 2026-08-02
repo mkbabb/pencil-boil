@@ -1,18 +1,23 @@
 /**
  * ESM resolve hook — lets the proofs run the library's TypeScript source under Node's
- * native type-stripping WITHOUT the library carrying `.ts` extensions on its relative
- * imports.
+ * native type-stripping while the library's source uses extension-safe `.js` relative
+ * imports for its published Node ESM surface.
  *
- * pencil-boil ships extensionless relative imports (`import { mulberry32 } from './random'`)
- * because that is what its bundler-resolution consumers require; adding `.ts` extensions
- * to the published source would force every consumer to enable `allowImportingTsExtensions`.
- * Node's ESM resolver, however, needs a full specifier. This hook appends `.ts` to bare
- * relative specifiers so `node --import ./proofs/loader.mjs proofs/*.proof.ts` resolves the
- * real source. It is dev-only (proofs/ is excluded from the published tarball).
+ * The published source points at sibling `.js` files, while the local proof tree contains
+ * the corresponding `.ts` files. This dev-only hook maps those `.js` source specifiers to
+ * their TypeScript siblings, and retains a fallback for extensionless proof-local imports.
+ * It is excluded from the published tarball.
  */
 
 export async function resolve(specifier, context, nextResolve) {
   const isRelative = specifier.startsWith('./') || specifier.startsWith('../');
+  if (isRelative && specifier.endsWith('.js')) {
+    try {
+      return await nextResolve(specifier.slice(0, -3) + '.ts', context);
+    } catch {
+      // fall through to the actual .js resolver below
+    }
+  }
   const hasExtension = /\.[a-z0-9]+$/i.test(specifier);
   if (isRelative && !hasExtension) {
     try {

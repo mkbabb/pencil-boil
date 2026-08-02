@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.1 — 2026-08-01 (the installed package boundary)
+
+Pencil now publishes compiled JavaScript and declarations from `dist/` with a Node ESM
+root export. Installed consumers require Node >=22; CI and release run on Node >=22.9,
+activate, and assert the exact `npm@11.12.1` declared by the package. The real packed-
+consumer proof installs one immutable tarball with Vue, imports the runtime surface, and
+typechecks strict Bundler, Node16, and NodeNext consumers; the browser lane packs that
+candidate and serves its compiled `dist/raster.js`.
+
 ## 0.11.0 — 2026-08-01 (the artifact is the blob)
 
 ### Changed

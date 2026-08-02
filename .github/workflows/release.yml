@@ -1,8 +1,7 @@
 # release — publish @mkbabb/pencil-boil to npm on a v*.*.* tag (G.W5 Sub-wave C).
 #
-# Re-runs the type gate (check) before npm publish. pencil-boil ships
-# TypeScript source directly (no build step); the published tarball is the
-# src/ tree per the package.json `files` field.
+# Re-runs the full package gate before npm publish. pencil-boil ships compiled
+# JavaScript and declarations from the dist/ tree per package.json `files`.
 #
 # IDEMPOTENT BY DESIGN: the tag is the record of a release, and a tag may land after the
 # version is already on the registry — a publish from the workstation, a re-pushed tag, a
@@ -25,11 +24,29 @@ jobs:
             - uses: actions/checkout@v4
             - uses: actions/setup-node@v4
               with:
-                  node-version: 24
+                  node-version: "22.9.0"
                   registry-url: "https://registry.npmjs.org"
+            - name: activate declared npm
+              run: |
+                  declared=$(node -p "require('./package.json').packageManager.replace(/^npm@/, '')")
+                  npm install --global "npm@${declared}"
+                  actual=$(npm --version)
+                  if [ "$actual" != "$declared" ]; then
+                      echo "npm $actual does not match declared npm@$declared"
+                      exit 1
+                  fi
             - run: npm ci
-            - name: check (tsc --noEmit)
-              run: npm run check
+            - name: test (full package gate)
+              run: npm test
+            - name: tag matches package version
+              run: |
+                  tag="${GITHUB_REF_NAME}"
+                  version=$(node -p "require('./package.json').version")
+                  expected="v${version}"
+                  if [ "$tag" != "$expected" ]; then
+                      echo "tag $tag does not match package version $version (expected $expected)"
+                      exit 1
+                  fi
             - name: already on the registry?
               id: published
               run: |

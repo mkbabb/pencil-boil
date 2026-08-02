@@ -3,13 +3,17 @@
  *
  * A second gate alongside `npm test` (Node check + proofs): the browser-only half of the
  * 0.9.0 raster invariant that Node cannot reach (no canvas / ImageBitmap / SVG layout). The
- * fixture server transpiles the SHIPPED `src/raster.ts` on the fly, so the lane exercises the
- * real code. chromium AND webkit — WebKit is the whole reason the bitmap cache exists.
+ * fixture server extracts and serves `dist/raster.js` from the exact packed candidate, so the
+ * lane exercises the real installed artifact. chromium AND webkit — WebKit is the whole
+ * reason the bitmap cache exists.
  */
+import { randomUUID } from 'node:crypto';
 import { defineConfig, devices } from '@playwright/test';
 
 const PORT = Number(process.env.PORT) || 4337;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
+const RUN_TOKEN = process.env.PENCIL_BROWSER_RUN_TOKEN ?? randomUUID();
+process.env.PENCIL_BROWSER_RUN_TOKEN = RUN_TOKEN;
 
 export default defineConfig({
   testDir: './proofs/browser',
@@ -36,9 +40,10 @@ export default defineConfig({
   ],
   webServer: {
     command: 'node proofs/browser/server.mjs',
-    url: `${BASE_URL}/health`,
-    reuseExistingServer: !process.env.CI,
+    url: `${BASE_URL}/_proof/health/${RUN_TOKEN}`,
+    reuseExistingServer: false,
     timeout: 30_000,
-    env: { PORT: String(PORT) },
+    env: { PORT: String(PORT), PENCIL_BROWSER_RUN_TOKEN: RUN_TOKEN },
+    stdout: 'pipe',
   },
 });

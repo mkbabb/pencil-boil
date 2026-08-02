@@ -1,4 +1,4 @@
-import { mulberry32 } from './random';
+import { mulberry32 } from './random.js';
 
 /** Wobble-seeded diamond polygon (4 vertices). Returns SVG polygon `points` string. */
 export function wobbleDiamond(
@@ -95,4 +95,3 @@ export function generateSunRays(seed: number): { outerPoly: string; innerPoly: s
     innerPoly: innerPoints.join(' '),
   };
 }
-

@@ -1,4 +1,4 @@
-export { mulberry32 } from './random';
+export { mulberry32 } from './random.js';
 
 export {
   type WobbleOptions,
@@ -12,9 +12,9 @@ export {
   boilLineFrames,
   boilRectFrames,
   ellipsePoints,
-} from './path';
+} from './path.js';
 
-export { wobbleDiamond, wobbleStarPolygon, generateSunRays } from './celestial';
+export { wobbleDiamond, wobbleStarPolygon, generateSunRays } from './celestial.js';
 
 export {
   type Easing,
@@ -23,7 +23,7 @@ export {
   easeInOutCubic,
   linear,
   resolveEasing,
-} from './easings';
+} from './easings.js';
 
 export {
   type BoilHandle,
@@ -36,7 +36,7 @@ export {
   createStrokeDrawIn,
   usePrefersReducedMotion,
   schedulerDebugInfo,
-} from './vue';
+} from './vue.js';
 
 export {
   type PoseSvgParts,
@@ -44,8 +44,8 @@ export {
   serializePoseSvg,
   isSelfContainedSvg,
   rasterizePoseToBlob,
-} from './raster';
+} from './raster.js';
 
-export { isBoilHeld, acquireHold, releaseHold, heldFrameCount } from './boilHoldGate';
+export { isBoilHeld, acquireHold, releaseHold, heldFrameCount } from './boilHoldGate.js';
 
-export { useBoilCache } from './frames';
+export { useBoilCache } from './frames.js';

@@ -58,8 +58,8 @@ import {
   type MaybeRefOrGetter,
   type Ref,
 } from 'vue';
-import { easeOutCubic, linear, type Easing } from './easings';
-import { rasterizePoseToBlob, type RasterStackOptions } from './raster';
+import { easeOutCubic, linear, type Easing } from './easings.js';
+import { rasterizePoseToBlob, type RasterStackOptions } from './raster.js';
 
 function normalizeFrameCount(value: number): number {
   if (!Number.isFinite(value)) return 1;
